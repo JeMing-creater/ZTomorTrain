@@ -1,0 +1,49 @@
+trainer:
+  num_epochs: 500
+  val_epochs: 10
+  warmup: 2
+  batch_size: 1
+  # batch_size: 16
+  resume: True
+  lr: 0.001
+  min_lr: 0.0000001
+  optimizer: adamw
+  weight_decay: 0.05
+  weight_decay_end: 0.04
+
+finetune:
+  checkpoint: newHWA_v2
+
+data_check:
+  dataPath1: /workspace/Jeming/data/NonsurgicalMR
+  dataPath2: /workspace/Jeming/data/SurgicalMR
+  writePath: data
+  # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
+  checkModels: ['ADC', 'T2_FS', 'V']
+  lowestResolution: [200, 200]
+  lowestSize: 500
+  is_align: False
+  is_Resolution: True
+  is_Size: True
+
+loader:
+  train_ratio: 0.8
+  num_workers: 0
+  dataPath: /workspace/Jeming/data/
+  # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
+  checkModels: ['ADC', 'T2_FS', 'V']
+  model_scale: [[0,6000],[0,4500],[0,4500]] # 对应模态的最小最大像素值，用于归一化
+  target_size: [128, 128, 64]
+
+BraTS_loader:
+  train_ratio: 0.8
+  num_workers: 0
+  image_size: 128
+  dataPath: /dataset/cv/seg/BRaTS2021/
+
+  
+visualization:
+  image_path: img
+  for_single: False
+  choose_dir: NonsurgicalMR
+  choose_image: '0000095438'
