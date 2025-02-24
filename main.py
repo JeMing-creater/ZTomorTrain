@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Dict
 
 import monai
-import pytz
 import torch
 import yaml
 from dataclasses import dataclass, field
