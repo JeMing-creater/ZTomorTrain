@@ -79,28 +79,25 @@ def load_model_dict(download_path, save_path=None, check_hash=True) -> OrderedDi
     return state_dict
 
 
-def resume_train_state(model, checkpoint, optimizer, scheduler, accelerator):
+def resume_train_state(model, path: str, optimizer, scheduler, train_loader: torch.utils.data.DataLoader,
+                       accelerator: Accelerator):
     try:
-        base_path = f"{os.getcwd()}/model_store/{checkpoint}/"
-        epoch_checkpoint = torch.load(base_path + "/epoch.pth.tar", map_location=accelerator.device)
+        # Get the most recent checkpoint
+        base_path = os.getcwd() + '/' + 'model_store' + '/' + path + '/checkpoint'
+        epoch_checkpoint = torch.load(base_path + "/epoch.pth.tar", map_location='cpu')
+        starting_epoch = epoch_checkpoint['epoch'] + 1
         best_score = epoch_checkpoint['best_score']
         best_metrics = epoch_checkpoint['best_metrics']
-        starting_epoch = epoch_checkpoint['epoch'] + 1
-        train_step = epoch_checkpoint['train_step']
-        val_step = epoch_checkpoint['val_step']
+        step = starting_epoch * len(train_loader)
         model = load_pretrain_model(base_path + "/pytorch_model.bin", model, accelerator)
-        
         optimizer.load_state_dict(torch.load(base_path + "/optimizer.bin"))
         scheduler.load_state_dict(torch.load(base_path + "/scheduler.bin"))
-        
-        accelerator.print(f'Loading training state successfully! Start training from {starting_epoch}, Best score: {best_score}')
-        
-        return model, optimizer, scheduler, starting_epoch, train_step, val_step, best_score, best_metrics
+        accelerator.print(f'Loading training state successfully! Start training from {starting_epoch}, Best Acc: {best_score}')
+        return model, optimizer, scheduler, starting_epoch, step, best_score, best_metrics
     except Exception as e:
         accelerator.print(e)
         accelerator.print(f'Failed to load training state!')
-        return model, optimizer, scheduler, 0, 0, 0, torch.nn.Parameter(torch.tensor([0.0]), requires_grad=False), {}
-
+        return model, optimizer, scheduler, 0, 0, torch.tensor(0), []
 
 def load_pretrain_model(pretrain_path: str, model: nn.Module, accelerator: Accelerator):
     try:
