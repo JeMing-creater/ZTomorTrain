@@ -1,6 +1,6 @@
 export OMP_NUM_THREADS=1
-# export CUDA_VISIBLE_DEVICES=2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,3,5
 torchrun \
-  --nproc_per_node 8 \
+  --nproc_per_node 4 \
   --master_port 29550 \
-  main.py
+  main_class.py

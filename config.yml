@@ -2,7 +2,7 @@ trainer:
   num_epochs: 500
   val_epochs: 10
   warmup: 2
-  batch_size: 1
+  batch_size: 2
   # batch_size: 16
   resume: True
   lr: 0.001
@@ -12,7 +12,7 @@ trainer:
   weight_decay_end: 0.04
 
 finetune:
-  checkpoint: newHWA_v2
+  checkpoint: swin_class
 
 data_check:
   dataPath1: /workspace/Jeming/data/NonsurgicalMR
@@ -27,9 +27,14 @@ data_check:
   is_Size: True
 
 loader:
-  train_ratio: 0.8
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
   num_workers: 0
-  dataPath: /workspace/Jeming/data/
+  dataPath: /root/.cache/huggingface/forget/datasets/MeiMR/
+  csvPath: /root/.cache/huggingface/forget/datasets/MeiMR/P_Class.xlsx
+  # checkPathology: ['SMI','LNM','VI','NBI','HER2','KI67']
+  checkPathology: ['SMI','LNM']
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
   checkModels: ['ADC', 'T2_FS', 'V']
   model_scale: [[0,6000],[0,4500],[0,4500]] # 对应模态的最小最大像素值，用于归一化

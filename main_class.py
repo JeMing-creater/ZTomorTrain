@@ -196,14 +196,11 @@ if __name__ == '__main__':
     model, optimizer, scheduler, train_loader, val_loader = accelerator.prepare(model, optimizer, scheduler, train_loader, val_loader)
     
     best_top_1 = torch.Tensor([best_top_1]).to(accelerator.device)
-    best_f1 = torch.Tensor([best_f1]).to(accelerator.device)
-    best_specificity = torch.Tensor([best_specificity]).to(accelerator.device)
-    best_qwk = torch.Tensor([best_qwk]).to(accelerator.device)
     
     for epoch in range(starting_epoch, config.trainer.num_epochs):
-        # train_step = train_one_epoch(model, loss_functions, train_loader,
-        #              optimizer, scheduler, metrics,
-        #              post_trans, accelerator, epoch, train_step)
+        train_step = train_one_epoch(model, loss_functions, train_loader,
+                     optimizer, scheduler, metrics,
+                     post_trans, accelerator, epoch, train_step)
 
         final_metrics, val_step = val_one_epoch(model, inference, val_loader,metrics, val_step, post_trans, accelerator)
         
