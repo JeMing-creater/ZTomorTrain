@@ -199,7 +199,7 @@ if __name__ == '__main__':
     
     loss_functions = {
         'focal_loss': monai.losses.FocalLoss(to_onehot_y=False),
-        'ce_loss':  nn.CrossEntropyLoss().to(accelerator.device),
+        'bce_loss':  nn.BCEWithLogitsLoss().to(accelerator.device),
     }
     
     metrics = {
