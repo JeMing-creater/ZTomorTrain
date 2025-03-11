@@ -9,3 +9,5 @@ monai
 nibabel
 pyyaml
 opencv-python
+openpyxl
+scikit-learn

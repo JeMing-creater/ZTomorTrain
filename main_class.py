@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = "0"
+# os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 import sys
 from datetime import datetime
 from typing import Dict
@@ -18,7 +18,7 @@ from timm.optim import optim_factory
 from src import utils
 from src.class_loader import get_dataloader
 from src.optimizer import LinearWarmupCosineAnnealingLR
-from src.utils import Logger, resume_train_state
+from src.utils import Logger, resume_train_state, split_metrics
 from src.eval import calculate_f1_score, specificity, quadratic_weighted_kappa, top_k_accuracy, calculate_metrics, accumulate_metrics, compute_final_metrics
 
 from src.model.HWAUNETR import HWAUNETR
@@ -33,18 +33,31 @@ def train_one_epoch(model: torch.nn.Module, loss_functions: Dict[str, torch.nn.m
           post_trans: monai.transforms.Compose, accelerator: Accelerator, epoch: int, step: int):
     # 训练
     model.train()
+    metrics_list = []
+    # set metric dict for every single task. 
+    for i, image_batch in enumerate(train_loader):
+        channels = image_batch['class_label'].size()[1]
+        metrics_list = split_metrics(channels, metrics)
+        break
+    
     for i, image_batch in enumerate(train_loader):
         logits = model(image_batch['image'])
         total_loss = 0
-        log = ''
+        logits_loss = logits.view(logits.size()[0]*logits.size()[1], logits.size()[2])
+        labels = image_batch['class_label'].view(image_batch['class_label'].size()[0]*image_batch['class_label'].size()[1], image_batch['class_label'].size()[2])
         for name in loss_functions:
             alpth = 1
-            loss = loss_functions[name](logits, image_batch['label'])
+            loss = loss_functions[name](logits_loss, labels.float())
             accelerator.log({'Train/' + name: float(loss)}, step=step)
             total_loss += alpth * loss
+        
         val_outputs = post_trans(logits)
-        # for metric_name in metrics:
-        #     metrics[metric_name](y_pred=val_outputs, y=image_batch['label'])
+        for j in range(image_batch['class_label'].size()[1]):
+            pred_channel = val_outputs[:, j, :].unsqueeze(1)  # shape: (batch_size, 1)
+            label_channel = image_batch['class_label'][:, j, :].unsqueeze(1)  # shape: (batch_size, 1)
+            for metric_name in metrics:
+                metrics_list[j][metric_name](y_pred=pred_channel, y=label_channel)
+        
         accelerator.backward(total_loss)
         optimizer.step()
         optimizer.zero_grad()
@@ -60,18 +73,30 @@ def train_one_epoch(model: torch.nn.Module, loss_functions: Dict[str, torch.nn.m
             )
         step += 1
     scheduler.step(epoch)
-    # metric = {} 
-    # for metric_name in metrics:
-    #     batch_acc = metrics[metric_name].aggregate()[0].to(accelerator.device)
-    #     if accelerator.num_processes > 1:
-    #         batch_acc = accelerator.reduce(batch_acc) / accelerator.num_processes
-    #     metric.update({
-    #         f'Train/mean {metric_name}': float(batch_acc.mean()),
-    #         f'Train/Object1 {metric_name}': float(batch_acc[0]),
-    #         f'Train/Object2 {metric_name}': float(batch_acc[1]),
-    #         f'Train/Object3 {metric_name}': float(batch_acc[2])
-    #     })
-    # accelerator.log(metric, step=epoch)
+    
+    metric = {}
+    for metric_name in metrics:
+        for channel in range(channels):
+            batch_acc = metrics_list[channel][metric_name].aggregate()[0].to(accelerator.device)
+            
+            if accelerator.num_processes > 1:
+                batch_acc = accelerator.reduce(batch_acc) / accelerator.num_processes
+
+            # give every single task metric
+            metrics_list[channel][metric_name].reset()
+            task_num = channel + 1
+            metric.update({
+                    f'Train/Task {task_num} {metric_name}': float(batch_acc.mean()),
+                })
+    for metric_name in metrics:
+        all_data = []
+        for key in metric.keys():
+            if metric_name in key:
+                all_data.append(metric[key])
+        me_data = sum(all_data) / len(all_data)        
+        metric.update({f'Train/{metric_name}': float(me_data)})
+        
+    accelerator.log(metric, step=epoch)
     return step
 
 @torch.no_grad()
@@ -81,57 +106,78 @@ def val_one_epoch(model: torch.nn.Module,
                   post_trans: monai.transforms.Compose, accelerator: Accelerator, test: bool=False):
     # 验证
     model.eval()
-    accumulated_metrics = {'tp': 0, 'tn': 0, 'fp': 0, 'fn': 0}
-    for i, image_batch in enumerate(val_loader):
-        # logits = inference(model, image_batch['image'])
-        logits = model(image_batch['image'])
-        val_outputs = post_trans(logits)
-        # 计算当前批次的度量
-        metrics = calculate_metrics(val_outputs, image_batch['class_label'])
-        
-        # 累积度量
-        accumulated_metrics = accumulate_metrics(metrics, accumulated_metrics)
-    #     logits = inference(image_batch['image'], model)
-    #     val_outputs = post_trans(logits)
-    #     for metric_name in metrics:
-    #         metrics[metric_name](y_pred=val_outputs, y=image_batch['label'])
-        accelerator.print(
-            f'[{i + 1}/{len(val_loader)}] Validation Loading...',
-            flush=True)
-        
-        step += 1
-        
-    # 使用gather_for_metrics()将所有GPU上的累积度量聚合到一起
-    all_gathered_metrics = accelerator.gather_for_metrics(accumulated_metrics)
-    
-    final_accumulated_metrics = {'tp': 0, 'tn': 0, 'fp': 0, 'fn': 0}
-    # 合并所有GPU上的度量
-    for metrics in all_gathered_metrics.keys():
-        for key in final_accumulated_metrics.keys():
-            # 确保metrics[key]是一个数值而不是Tensor，如果是Tensor则需要.item()
-            if isinstance(all_gathered_metrics[key], torch.Tensor):
-                final_accumulated_metrics[key] += all_gathered_metrics[key].item()
-            else:
-                final_accumulated_metrics[key] += all_gathered_metrics[key]
-    
-
-    # 计算最终度量
-    final_metrics = compute_final_metrics(final_accumulated_metrics)
-    
-    metric = {}
     if test:
         flag = 'Test'
     else:
         flag = 'Val'
-    metric.update({
-            f'{flag}/Top1': float(final_metrics['accuracy']),
-            f'{flag}/precision': float(final_metrics['precision']),
-            f'{flag}/recall': float(final_metrics['recall']),
-            f'{flag}/specificity': float(final_metrics['specificity']),
-            f'{flag}/f1': float(final_metrics['f1'])
-        })
+    metrics_list = []
+    # set metric dict for every single task. 
+    for i, image_batch in enumerate(val_loader):
+        channels = image_batch['class_label'].size()[1]
+        metrics_list = split_metrics(channels, metrics)
+        break
     
-    return final_metrics, step
+    if metrics_list == []:
+        accelerator.print('Val Error!')
+        return {}, step
+    
+    for i, image_batch in enumerate(val_loader):
+        # logits = inference(model, image_batch['image'])
+        logits = model(image_batch['image'])  # some moedls can not accepted inference, I do not know why.
+        log = ''
+        total_loss = 0
+        # class for loss compute, need to connect a tensor.
+        logits_loss = logits.view(logits.size()[0]*logits.size()[1], logits.size()[2])
+        labels_loss = image_batch['class_label'].view(image_batch['class_label'].size()[0]*image_batch['class_label'].size()[1], image_batch['class_label'].size()[2])
+        for name in loss_functions:
+            loss = loss_functions[name](logits_loss, labels_loss.float())
+            accelerator.log({f'{flag}/' + name: float(loss)}, step=step)
+            log += f'{name} {float(loss):1.5f} '
+            total_loss += loss
+        
+        accelerator.log({
+            f'{flag}/Total Loss': float(total_loss),
+        }, step=step)
+        
+        # compute metrics, but need to compute for every single task.
+        val_outputs = post_trans(logits)
+        
+        for j in range(image_batch['class_label'].size()[1]):
+            pred_channel = val_outputs[:, j, :].unsqueeze(1)  # shape: (batch_size, 1)
+            label_channel = image_batch['class_label'][:, j, :].unsqueeze(1)  # shape: (batch_size, 1)
+            for metric_name in metrics:
+                metrics_list[j][metric_name](y_pred=pred_channel, y=label_channel)
+        
+        accelerator.print(
+            f'[{i + 1}/{len(val_loader)}] {flag} Validation Loading...',
+            flush=True)
+        
+        step += 1    
+    metric = {}
+    
+    for metric_name in metrics:
+        for channel in range(channels):
+            batch_acc = metrics_list[channel][metric_name].aggregate()[0].to(accelerator.device)
+            
+            if accelerator.num_processes > 1:
+                batch_acc = accelerator.reduce(batch_acc) / accelerator.num_processes
+
+            # give every single task metric
+            metrics_list[channel][metric_name].reset()
+            task_num = channel + 1
+            metric.update({
+                    f'{flag}/Task {task_num} {metric_name}': float(batch_acc.mean()),
+                })
+    for metric_name in metrics:
+        all_data = []
+        for key in metric.keys():
+            if metric_name in key:
+                all_data.append(metric[key])
+        me_data = sum(all_data) / len(all_data)        
+        metric.update({f'{flag}/{metric_name}': float(me_data)})
+        
+    accelerator.log(metric, step=epoch)
+    return metric, step
 
 
 if __name__ == '__main__':
@@ -144,7 +190,7 @@ if __name__ == '__main__':
     accelerator.print(objstr(config))
     
     accelerator.print('load model...')
-    model = MultiTaskSwinUNETR(img_size=config.loader.target_size, in_channels=3, num_tasks=2, num_classes_per_task=1)
+    model = MultiTaskSwinUNETR(img_size=config.loader.target_size, in_channels=3, num_tasks=6, num_classes_per_task=1)
     accelerator.print('load dataset...')
     train_loader, val_loader, test_loader = get_dataloader(config)
     
@@ -153,14 +199,15 @@ if __name__ == '__main__':
     
     loss_functions = {
         'focal_loss': monai.losses.FocalLoss(to_onehot_y=False),
-        'bce_loss':  nn.BCEWithLogitsLoss().to(accelerator.device),
+        'ce_loss':  nn.CrossEntropyLoss().to(accelerator.device),
     }
     
     metrics = {
-        'top-k': top_k_accuracy,
-        'f1_score': calculate_f1_score,
-        'specificity': specificity,
-        'QWK': quadratic_weighted_kappa,
+        'accuracy': monai.metrics.ConfusionMatrixMetric(include_background=False, metric_name="accuracy"),
+        'f1': monai.metrics.ConfusionMatrixMetric(include_background=False, metric_name='f1 score'),
+        'specificity': monai.metrics.ConfusionMatrixMetric(include_background=False, metric_name="specificity"),
+        'recall': monai.metrics.ConfusionMatrixMetric(include_background=False, metric_name="recall"),
+        'miou_metric':monai.metrics.MeanIoU(include_background=False),
     }
     
     post_trans = monai.transforms.Compose([
@@ -187,15 +234,15 @@ if __name__ == '__main__':
     
     starting_epoch = 0
     
-    
     if config.trainer.resume:
         model, optimizer, scheduler, starting_epoch, train_step, best_top_1, best_test_top_1, best_metrics, best_test_metrics = utils.resume_train_state(model, '{}'.format(
-            config.finetune.checkpoint), optimizer, scheduler, train_loader, accelerator)
+            config.finetune.checkpoint), optimizer, scheduler, train_loader, accelerator, seg=False)
         val_step = train_step
     
-    model, optimizer, scheduler, train_loader, val_loader = accelerator.prepare(model, optimizer, scheduler, train_loader, val_loader)
+    model, optimizer, scheduler, train_loader, val_loader, test_loader = accelerator.prepare(model, optimizer, scheduler, train_loader, val_loader, test_loader)
     
     best_top_1 = torch.Tensor([best_top_1]).to(accelerator.device)
+    best_test_top_1 = torch.Tensor([best_test_top_1]).to(accelerator.device)
     
     for epoch in range(starting_epoch, config.trainer.num_epochs):
         train_step = train_one_epoch(model, loss_functions, train_loader,
@@ -205,15 +252,15 @@ if __name__ == '__main__':
         final_metrics, val_step = val_one_epoch(model, inference, val_loader,metrics, val_step, post_trans, accelerator)
         
         # 保存模型
-        if final_metrics['accuracy'] > best_top_1:
+        if final_metrics['Val/accuracy'] > best_top_1:
             accelerator.save_state(output_dir=f"{os.getcwd()}/model_store/{config.finetune.checkpoint}/best")
-            best_top_1 = final_metrics['accuracy']
+            best_top_1 = final_metrics['Val/accuracy']
             best_metrics = final_metrics
             # 记录最优test acc
             final_metrics, _ = val_one_epoch(model, inference, test_loader,
                                                                    metrics, -1,
-                                                                   post_trans, accelerator)
-            best_test_top_1 = final_metrics['accuracy']
+                                                                   post_trans, accelerator, test=True)
+            best_test_top_1 = final_metrics['Test/accuracy']
             best_test_metrics = final_metrics
             
         accelerator.print(f'Epoch [{epoch+1}/{config.trainer.num_epochs}] best acc: {best_top_1}, best test acc: {best_test_top_1}')
