@@ -169,7 +169,7 @@ class MultiModalityDataset(monai.data.Dataset):
         
         result = {'image': image_tensor, 'label': label_tensor}
         result = self.transforms(result)
-        return {'image': result['image'], 'label': result['label'], 'class_label': torch.tensor(item['class_label']).view(-1,1)}
+        return {'image': result['image'], 'label': result['label'], 'class_label': torch.tensor(item['class_label']).view(-1,1).long()}
 def split_list(data, ratios):
     # 计算每个部分的大小
     sizes = [math.ceil(len(data) * r) for r in ratios]

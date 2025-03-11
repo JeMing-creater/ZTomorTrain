@@ -2,7 +2,7 @@ import os
 import random
 import sys
 from collections import OrderedDict
-
+from copy import deepcopy
 import math
 import numpy as np
 import torch
@@ -95,7 +95,7 @@ def resume_train_state(model, path: str, optimizer, scheduler, train_loader: tor
             model = load_pretrain_model(base_path + "/pytorch_model.bin", model, accelerator)
             optimizer.load_state_dict(torch.load(base_path + "/optimizer.bin"))
             scheduler.load_state_dict(torch.load(base_path + "/scheduler.bin"))
-            accelerator.print(f'Loading training state successfully! Start training from {starting_epoch}, Best Acc: {best_score}')
+            accelerator.print(f'Loading training state successfully! Start training from {starting_epoch}, Best Acc: {best_top_1}')
             return model, optimizer, scheduler, starting_epoch, step, best_top_1, best_test_top_1, best_metrics, best_test_metrics
         except Exception as e:
             accelerator.print(e)
@@ -389,3 +389,14 @@ def check_label_size(main_directory, checkModels, lowestSize):
             inaccaptable_size[modality] = None  # 或者其他适当的默认值
 
     return (not bool(inaccaptable_size), inaccaptable_size)
+
+
+def split_metrics(channels, metrics_template):
+    metrics_list = []
+
+    for _ in range(channels):
+        # 深拷贝metrics模板，确保每个通道的metrics字典是独立的
+        metrics_copy = deepcopy(metrics_template)
+        metrics_list.append(metrics_copy)
+
+    return metrics_list

@@ -37,11 +37,24 @@ pip install -r requirements.txt
 ```
 
 ## training
-single device training
+single device training for GCM segmentation.
 ```
 python3 main.py
 ```
-multi-devices training
+single device training for GCM classification.
+```
+python3 main_class.py
+```
+single device training for BraTS 2021.
+```
+python3 main_Br.py
+```
+multi-devices training, user need to rewrite running target in this .sh flie.
 ```
 sh run.sh
+```
+
+# tensorboard
+```
+tensorboard --logdir=/logs
 ```

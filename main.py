@@ -120,6 +120,7 @@ def val_one_epoch(model: torch.nn.Module,
             })
             hd95_acc = torch.Tensor([metric[f'{flag}/mean hd95_metric']]).to(accelerator.device)
             hd95_class = batch_acc
+    accelerator.log(metric, step=epoch)
     return dice_acc, dice_class, hd95_acc, hd95_class, step
 
 
@@ -186,7 +187,7 @@ if __name__ == '__main__':
             config.finetune.checkpoint), optimizer, scheduler, train_loader, accelerator)
         val_step = train_step
     
-    model, optimizer, scheduler, train_loader, val_loader = accelerator.prepare(model, optimizer, scheduler, train_loader, val_loader)
+    model, optimizer, scheduler, train_loader, val_loader, test_loader = accelerator.prepare(model, optimizer, scheduler, train_loader, val_loader, test_loader)
     
     best_score = torch.Tensor([best_score]).to(accelerator.device)
     best_hd95 = torch.Tensor([best_hd95]).to(accelerator.device)
