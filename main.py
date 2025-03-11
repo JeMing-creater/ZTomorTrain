@@ -127,7 +127,7 @@ def val_one_epoch(model: torch.nn.Module,
 if __name__ == '__main__':
     config = EasyDict(yaml.load(open('config.yml', 'r', encoding="utf-8"), Loader=yaml.FullLoader))
     utils.same_seeds(50)
-    logging_dir = os.getcwd() + '/logs/' + config.finetune.checkpoint +str(datetime.now())
+    logging_dir = os.getcwd() + '/logs/' + config.finetune.checkpoint + str(datetime.now()).replace(' ','_').replace('-','_').replace(':','_').replace('.','_')
     accelerator = Accelerator(cpu=False, log_with=["tensorboard"], logging_dir=logging_dir)
     Logger(logging_dir if accelerator.is_local_main_process else None)
     accelerator.init_trackers(os.path.split(__file__)[-1].split(".")[0])
