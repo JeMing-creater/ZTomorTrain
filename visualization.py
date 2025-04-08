@@ -45,8 +45,11 @@ def visualize_for_single(config, model, accelerator):
         
         images.append(batch['image'].unsqueeze(1))
         labels.append(batch['label'].unsqueeze(1))
+
+        
         image_size.append(tuple(batch['image_meta_dict']['spatial_shape'][i].item() for i in range(3)))
         affines.append(batch['label_meta_dict']['affine'])
+        
         
     image_tensor = torch.cat(images, dim=1)
     label_tensor = torch.cat(labels, dim=1)
@@ -56,6 +59,8 @@ def visualize_for_single(config, model, accelerator):
     post_trans = monai.transforms.Compose([
         monai.transforms.Activations(sigmoid=True), monai.transforms.AsDiscrete(threshold=0.5)
     ])
+    
+    
     
     img = inference(image_tensor.to(accelerator.device), model.to(accelerator.device))
     seg = post_trans(img[0])
@@ -163,6 +168,7 @@ def visualize_for_all(config, image_list, model, accelerator):
                 original_str,
             )
 
+
 def warm_up(model: torch.nn.Module, loss_functions: Dict[str, torch.nn.modules.loss._Loss],
           train_loader: torch.utils.data.DataLoader,
           optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler._LRScheduler, accelerator: Accelerator):
@@ -182,7 +188,6 @@ def warm_up(model: torch.nn.Module, loss_functions: Dict[str, torch.nn.modules.l
             flush=True)
     scheduler.step(0)
     return model
-
 
 @torch.no_grad()
 def val_one_epoch(model: torch.nn.Module,

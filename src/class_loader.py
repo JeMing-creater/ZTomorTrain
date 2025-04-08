@@ -3,11 +3,13 @@ import math
 import yaml
 import torch
 import monai
+import random
 import numpy as np
 import pandas as pd
 import nibabel as nib
 import SimpleITK as sitk
 from easydict import EasyDict
+import torch.nn.functional as F
 from monai.utils import ensure_tuple_rep
 from monai.networks.utils import one_hot
 sitk.ProcessObject.SetGlobalWarningDisplay(False)
@@ -64,19 +66,49 @@ def read_csv(config):
         
     return content_dict
 
+def read_csv_for_PM(config):
+    csv_path = config.loader.csvPath
+    # 定义dtype转换，将第二列（索引为1）读作str
+    dtype_converters = {1: str}
+    
+    df1 = pd.read_excel(csv_path, engine='openpyxl', dtype=dtype_converters, sheet_name='腹膜转移分类')
+    df2 = pd.read_excel(csv_path, engine='openpyxl', dtype=dtype_converters, sheet_name='淋巴结同时序（手术）')
+    df3 = pd.read_excel(csv_path, engine='openpyxl', dtype=dtype_converters, sheet_name='淋巴结异时序（化疗后）')
+
+    # 创建空字典
+    content_dict1 = {}
+    content_dict2 = {}
+    content_dict3 = {}
+    # 遍历DataFrame的每一行，从第二行开始
+    for index, row in df1.iterrows():
+        
+        key = row[1]  # 第2列作为键
+        values = row[2]  # 第3列的数据读为label
+        
+        content_dict1[key] = values
+    
+    for index, row in df2.iterrows():
+        
+        key = row[1]  # 第2列作为键
+        values = row[2]  # 第3列的数据读为label
+        
+        content_dict2[key] = values
+
+    for index, row in df3.iterrows():
+        
+        key = row[1]  # 第2列作为键
+        values = row[2]  # 第3列的数据读为label
+        
+        content_dict3[key] = values
+
+    return content_dict1, content_dict2, content_dict3
+
 def load_MR_dataset_images(root, use_data, use_models, use_data_dict):
-    root1 = root + '/' + 'NonsurgicalMR' + '/'
-    root2 = root + '/' + 'SurgicalMR' + '/'
-    images_path1 = os.listdir(root1)
-    images_path2 = os.listdir(root2)
+    images_path = os.listdir(root)
     images_list = []
     for path in use_data:
-        if path in images_path1:
-            models = os.listdir(root1 + '/' + path + '/')
-            root = root1
-        elif path in images_path2:
-            models = os.listdir(root2 + '/' + path + '/')
-            root = root2
+        if path in images_path:
+            models = os.listdir(root + '/' + path + '/')
         else:
             continue
         
@@ -134,12 +166,45 @@ def get_transforms(config: EasyDict) -> Tuple[
     ])
     return load_transform, train_transform, val_transform
 
+def extract_and_resize(image, label, over_add=0):
+    # 获取label中值为1的点的坐标
+    indices = torch.nonzero(label[0])  # 去掉batch维度，找到非零索引
+    
+    # 找到最长的维度
+    max_size = max(image[0].shape[0], image[0].shape[1], image[0].shape[2])
+    
+    # 计算各个维度上的 over_add，按比例缩小较短维度的扩展量
+    over_add_x = round(over_add * (image[0].shape[0] / max_size))
+    over_add_y = round(over_add * (image[0].shape[1] / max_size))
+    over_add_z = round(over_add * (image[0].shape[2] / max_size))
+    
+    # 获取在每个维度上的最小和最大索引
+    min_x, min_y, min_z = indices.min(dim=0).values.tolist()
+    max_x, max_y, max_z = indices.max(dim=0).values.tolist()
+    
+    # 计算扩展后的坐标，并限制在合法范围内
+    min_x = max(0, min_x - over_add_x)
+    max_x = min(image[0].shape[0]-1, max_x + over_add_x)
+    min_y = max(0, min_y - over_add_y)
+    max_y = min(image[0].shape[1]-1, max_y + over_add_y)
+    min_z = max(0, min_z - over_add_z)
+    max_z = min(image[0].shape[2]-1, max_z + over_add_z)
+    
+    # 切割image和label
+    cropped_image = image[:, min_x:max_x+1, min_y:max_y+1, min_z:max_z+1]
+    
+    # 直接使用 interpolate 进行 resize 到 (1, 128, 128, 64)
+    # resized_image = F.interpolate(cropped_image.unsqueeze(0), size=(128, 128, 64), mode='trilinear', align_corners=False).squeeze(0)
+    resized_image = monai.transforms.Resize(spatial_size=(label.shape[1],label.shape[2],label.shape[3]), mode=("trilinear"))(cropped_image)
+    return resized_image
 
 class MultiModalityDataset(monai.data.Dataset):
-    def __init__(self, data, loadforms, transforms):
+    def __init__(self, data, loadforms, transforms, over_label=False, over_add=0):
         self.data = data
         self.transforms = transforms
         self.loadforms = loadforms
+        self.over_label = over_label
+        self.over_add = over_add
         
     def __len__(self):
         return len(self.data)
@@ -157,7 +222,10 @@ class MultiModalityDataset(monai.data.Dataset):
 
             combined_data[f'model_{i}_image'] = globals()[f'data_{i}']['image']
             combined_data[f'model_{i}_label'] = globals()[f'data_{i}']['label']
-        
+
+            imgae = extract_and_resize(combined_data[f'model_{i}_image'], combined_data[f'model_{i}_label'], self.over_add)
+            combined_data[f'model_{i}_image'] = imgae
+            
         images = []
         labels = []
         
@@ -169,7 +237,8 @@ class MultiModalityDataset(monai.data.Dataset):
         
         result = {'image': image_tensor, 'label': label_tensor}
         result = self.transforms(result)
-        return {'image': result['image'], 'label': result['label'], 'class_label': torch.tensor(item['class_label']).view(-1,1).long()}
+        return {'image': result['image'], 'label': result['label'], 'class_label': torch.tensor(item['class_label']).unsqueeze(0).long()}
+
 def split_list(data, ratios):
     # 计算每个部分的大小
     sizes = [math.ceil(len(data) * r) for r in ratios]
@@ -189,27 +258,78 @@ def split_list(data, ratios):
     
     return parts
 
+def calculate_ratio(input_dict):
+    total_zeros = 0
+    total_ones = 0
+    total_elements = 0
+    
+    for value in input_dict.values():
+        total_zeros += value.count(0)
+        total_ones += value.count(1)
+        total_elements += len(value)
+    
+    ratio_zeros = total_zeros / total_elements if total_elements > 0 else 0
+    ratio_ones = total_ones / total_elements if total_elements > 0 else 0
+    
+    return {'0': ratio_zeros, '1': ratio_ones}
+
+def calculate_label_ratio(train_loader):
+    total_zeros = 0
+    total_ones = 0
+    total_labels = 0
+
+    # 遍历 train_loader 中的所有批次
+    for i, batch in enumerate(train_loader):
+        labels = batch['class_label']
+        total_zeros += (labels == 0).sum().item()  # 统计标签为0的数量
+        total_ones += (labels == 1).sum().item()   # 统计标签为1的数量
+        # total_labels += labels.size(0)             # 统计标签的总数量
+
+    total = total_zeros + total_ones
+    a_ratio = total_zeros / total
+    b_ratio = total_ones / total
+    
+    return [a_ratio, b_ratio]
+
 def get_dataloader(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     datapath = config.loader.dataPath
     use_models = config.loader.checkModels
     
-    use_data_dict = read_csv(config)
-    use_data = list(use_data_dict.keys())
-    
+    # data1: 腹膜转移分类; data2: 淋巴结同时序（手术）; data3: 淋巴结异时序（化疗后）
+    data1, data2, data3 = read_csv_for_PM(config)
+    if config.loader.task == 'PM':
+        use_data_dict = data1
+    elif config.loader.task == 'NL_SS':
+        use_data_dict = data2
+    else:
+        use_data_dict = data3
+
+    use_data_list = list(use_data_dict.keys())
+    remove_list = config.loader.leapfrog
+    use_data = [item for item in use_data_list if item not in remove_list]
     
     data = load_MR_dataset_images(datapath, use_data, use_models, use_data_dict)
     
     load_transform, train_transform, val_transform = get_transforms(config)
     
+    # shuffle data for objective verification
+    random.shuffle(data)
+
     train_data, val_data, test_data = split_list(data, [config.loader.train_ratio, config.loader.val_ratio, config.loader.test_ratio]) 
 
-    train_dataset = MultiModalityDataset(data=train_data, 
+    # if not need test, can use fusion to fuse two data
+    if config.loader.fusion == True:
+        need_val_data = val_data + test_data
+        val_data = need_val_data
+        test_data = need_val_data
+
+    train_dataset = MultiModalityDataset(data=train_data, over_label=config.loader.over_label, over_add = config.loader.over_add, 
                                          loadforms = load_transform,
                                          transforms=train_transform)
-    val_dataset   = MultiModalityDataset(data=val_data, 
+    val_dataset   = MultiModalityDataset(data=val_data, over_label=config.loader.over_label, over_add = config.loader.over_add,
                                          loadforms = load_transform,
                                          transforms=val_transform)
-    test_dataset   = MultiModalityDataset(data=test_data, 
+    test_dataset   = MultiModalityDataset(data=test_data, over_label=config.loader.over_label, over_add = config.loader.over_add,
                                          loadforms = load_transform,
                                          transforms=val_transform)
     
@@ -222,27 +342,48 @@ def get_dataloader(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, torch
     
     return train_loader, val_loader, test_loader
 
+def check_loader(config):
+    train_loader, val_loader, test_loader = get_dataloader(config)
+    
+    for i, batch in enumerate(train_loader):
+        try:
+            print(batch['image'].shape)
+            print(batch['label'].shape)
+            print(batch['class_label'].shape)
+            # print(batch['class_label'])
+        except Exception as e:
+            print(f"Error occurred while loading batch {i}: {e}")
+            continue 
+
+    for i, batch in enumerate(val_loader):
+        try:
+            print(batch['image'].shape)
+            print(batch['label'].shape)
+            print(batch['class_label'].shape)
+            # print(batch['class_label'])
+        except Exception as e:
+            print(f"Error occurred while loading batch {i}: {e}")
+            continue 
+
+    for i, batch in enumerate(test_loader):
+        try:
+            print(batch['image'].shape)
+            print(batch['label'].shape)
+            print(batch['class_label'].shape)
+            # print(batch['class_label'])
+        except Exception as e:
+            print(f"Error occurred while loading batch {i}: {e}")
+            continue
 
 
 if __name__ == '__main__':
     config = EasyDict(yaml.load(open('/workspace/Jeming/Project1/config.yml', 'r', encoding="utf-8"), Loader=yaml.FullLoader))
     
-    train_loader, val_loader, test_loader = get_dataloader(config)
-    
-    for i, batch in enumerate(train_loader):
-        print(batch['image'].shape)
-        print(batch['label'].shape)
-        print(batch['class_label'].shape)
-        print(batch['class_label'])
+    config.loader.task = 'PM'
+    check_loader(config)
 
-    for i, batch in enumerate(val_loader):
-        print(batch['image'].shape)
-        print(batch['label'].shape)
-        print(batch['class_label'].shape)
-        print(batch['class_label'])
-    
-    for i, batch in enumerate(test_loader):
-        print(batch['image'].shape)
-        print(batch['label'].shape)
-        print(batch['class_label'].shape)
-        print(batch['class_label'])
+    config.loader.task = 'NL_SS'
+    check_loader(config)
+
+    config.loader.task = 'NL_DS'
+    check_loader(config)
