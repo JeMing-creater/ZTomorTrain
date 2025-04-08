@@ -16,7 +16,7 @@ from objprint import objstr
 from timm.optim import optim_factory
 
 from src import utils
-from class_loader import get_dataloader
+from src.class_loader import get_dataloader
 from src.optimizer import LinearWarmupCosineAnnealingLR
 from src.utils import Logger, resume_train_state, split_metrics
 from src.eval import calculate_f1_score, specificity, quadratic_weighted_kappa, top_k_accuracy, calculate_metrics, accumulate_metrics, compute_final_metrics
