@@ -12,14 +12,14 @@ trainer:
   weight_decay_end: 0.04
 
 finetune:
-  checkpoint: swin_class
+  checkpoint: hwa_unetr_class_for_2
 
 data_check:
   dataPath1: /workspace/Jeming/data/NonsurgicalMR
   dataPath2: /workspace/Jeming/data/SurgicalMR
   writePath: data
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ['ADC', 'T2_FS', 'V']
+  checkModels: ['ADC', 'T2_FS']
   lowestResolution: [200, 200]
   lowestSize: 500
   is_align: False
@@ -30,13 +30,25 @@ loader:
   train_ratio: 0.7
   val_ratio: 0.1
   test_ratio: 0.2
+  # fusion: do you need test dataset? if not, can use fusion to fuse val and test data to one dataloader.
+  fusion: True
   num_workers: 0
-  dataPath: /root/.cache/huggingface/forget/datasets/MeiMR/
-  csvPath: /root/.cache/huggingface/forget/datasets/MeiMR/P_Class.xlsx
-  checkPathology: ['SMI','LNM','VI','NBI','HER2','KI67']
+  over_label: False
+  over_add: 10
+  # task: for different task: PM(腹膜转移分类) ; NL_SS(淋巴结同时序（手术）); NL_DS(淋巴结异时序（化疗后）)
+  task: PM
+  # task: NL_SS
+  # task: NL_DS
+  # leapfrog: some data error can write in this list to remove from dataloader
+  # leapfrog: ['0001902261', '0000439538','0002235469','0001308202']
+  leapfrog: []
+  dataPath: /root/.cache/huggingface/forget/datasets/MeiMRNew/ALL/
+  csvPath: /root/.cache/huggingface/forget/datasets/MeiMRNew//Classification.xlsx
+  # # csvPath: /root/.cache/huggingface/forget/datasets/MeiMR/P_Class.xlsx
+  # # checkPathology: ['SMI','LNM','VI','NBI','HER2','KI67']
   # checkPathology: ['SMI','LNM']
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ['ADC', 'T2_FS', 'V']
+  checkModels: ['ADC','V', 'T2_FS']
   model_scale: [[0,6000],[0,4500],[0,4500]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
 
