@@ -12,14 +12,14 @@ trainer:
   weight_decay_end: 0.04
 
 finetune:
-  checkpoint: hwa_unetr_class_for_1_adc
+  checkpoint: FMUNETR
 
 data_check:
   dataPath1: /workspace/Jeming/data/NonsurgicalMR
   dataPath2: /workspace/Jeming/data/SurgicalMR
   writePath: data
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ['ADC']
+  checkModels: ['ADC', 'T2_FS']
   lowestResolution: [200, 200]
   lowestSize: 500
   is_align: False

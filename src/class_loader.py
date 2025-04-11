@@ -129,9 +129,7 @@ def load_MR_dataset_images(root, use_data, use_models, use_data_dict):
 
 def get_transforms(config: EasyDict) -> Tuple[
     monai.transforms.Compose, monai.transforms.Compose]:
-    
     load_transform = []
-    
     for model_scale in config.loader.model_scale:
         load_transform.append(
             monai.transforms.Compose([
@@ -291,6 +289,13 @@ def calculate_label_ratio(train_loader):
     
     return [a_ratio, b_ratio]
 
+def check_example(data):
+    index = []
+    for d in data:
+        num = d['image'][0].split('/')[-1].split('.')[0]
+        index.append(num)
+    return index
+
 def get_dataloader(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     datapath = config.loader.dataPath
     use_models = config.loader.checkModels
@@ -323,6 +328,10 @@ def get_dataloader(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, torch
         val_data = need_val_data
         test_data = need_val_data
 
+    train_example = check_example(train_data)
+    val_example = check_example(val_data)
+    test_example = check_example(test_data)
+
     train_dataset = MultiModalityDataset(data=train_data, over_label=config.loader.over_label, over_add = config.loader.over_add, 
                                          loadforms = load_transform,
                                          transforms=train_transform)
@@ -340,10 +349,10 @@ def get_dataloader(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, torch
     test_loader = monai.data.DataLoader(test_dataset, num_workers=config.loader.num_workers, 
                                        batch_size=config.trainer.batch_size, shuffle=False)
     
-    return train_loader, val_loader, test_loader
+    return train_loader, val_loader, test_loader, (train_example, val_example, test_example)
 
 def check_loader(config):
-    train_loader, val_loader, test_loader = get_dataloader(config)
+    train_loader, val_loader, test_loader, _ = get_dataloader(config)
     
     for i, batch in enumerate(train_loader):
         try:

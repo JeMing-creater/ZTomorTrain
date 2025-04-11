@@ -400,3 +400,24 @@ def split_metrics(channels, metrics_template):
         metrics_list.append(metrics_copy)
 
     return metrics_list
+
+
+def write_example(example, log_dir):
+
+    with open(log_dir + '/' + "train_example.txt", "w") as file:
+        # 遍历列表中的每个字符串
+        for item in example[0]:
+            # 将每个元素写入文件，每个字符串占一行
+            file.write(item + "\n")
+    
+    with open(log_dir + '/' + "val_example.txt", "w") as file:
+        # 遍历列表中的每个字符串
+        for item in example[1]:
+            # 将每个元素写入文件，每个字符串占一行
+            file.write(item + "\n")
+    
+    with open(log_dir + '/' + "test_example.txt", "w") as file:
+        # 遍历列表中的每个字符串
+        for item in example[2]:
+            # 将每个元素写入文件，每个字符串占一行
+            file.write(item + "\n")
