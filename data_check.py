@@ -5,7 +5,7 @@ from src.utils import (
     get_directory_item, check_open_files, check_subdirectories_contain_files,check_slices_consistency,check_modalities_resolution, check_label_size, write_result
 )
     
-                       
+
 
 def check(config, dataPath, checkModels):
     directory_item = get_directory_item(dataPath)

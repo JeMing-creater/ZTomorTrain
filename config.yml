@@ -3,7 +3,6 @@ trainer:
   val_epochs: 10
   warmup: 2
   batch_size: 2
-  # batch_size: 16
   resume: True
   lr: 0.001
   min_lr: 0.0000001
@@ -12,14 +11,14 @@ trainer:
   weight_decay_end: 0.04
 
 finetune:
-  checkpoint: FMUNETR
+  checkpoint: FMUNETR_single_modal_T2
 
 data_check:
   dataPath1: /workspace/Jeming/data/NonsurgicalMR
   dataPath2: /workspace/Jeming/data/SurgicalMR
   writePath: data
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ['ADC', 'T2_FS']
+  checkModels: ["ADC", "T2_FS"]
   lowestResolution: [200, 200]
   lowestSize: 500
   is_align: False
@@ -35,6 +34,8 @@ loader:
   num_workers: 0
   over_label: False
   over_add: 10
+  # use this flag can fix experiment examples, must set train_example.txt, val_example.txt and test_example.txt to root.
+  fix_example: True
   # task: for different task: PM(腹膜转移分类) ; NL_SS(淋巴结同时序（手术）); NL_DS(淋巴结异时序（化疗后）)
   task: PM
   # task: NL_SS
@@ -42,14 +43,10 @@ loader:
   # leapfrog: some data error can write in this list to remove from dataloader
   # leapfrog: ['0001902261', '0000439538','0002235469','0001308202']
   leapfrog: []
-  dataPath: /root/.cache/huggingface/forget/datasets/MeiMRNew/ALL/
-  csvPath: /root/.cache/huggingface/forget/datasets/MeiMRNew//Classification.xlsx
-  # # csvPath: /root/.cache/huggingface/forget/datasets/MeiMR/P_Class.xlsx
-  # # checkPathology: ['SMI','LNM','VI','NBI','HER2','KI67']
-  # checkPathology: ['SMI','LNM']
+  root: /root/.cache/huggingface/forget/datasets/MeiMRNew/
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ['ADC','V', 'T2_FS']
-  model_scale: [[0,6000],[0,4500],[0,4500]] # 对应模态的最小最大像素值，用于归一化
+  checkModels: ["T2_FS"]
+  model_scale: [[0, 6000], [0, 4500], [0, 4500]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
 
 BraTS_loader:
@@ -58,9 +55,8 @@ BraTS_loader:
   image_size: 128
   dataPath: /dataset/cv/seg/BRaTS2021/
 
-  
 visualization:
   image_path: img
   for_single: False
   choose_dir: NonsurgicalMR
-  choose_image: '0000095438'
+  choose_image: "0000095438"

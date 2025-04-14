@@ -33,18 +33,10 @@ def train_one_epoch(model: torch.nn.Module, loss_functions: Dict[str, torch.nn.m
           post_trans: monai.transforms.Compose, accelerator: Accelerator, epoch: int, step: int):
     # 训练
     model.train()
-    # metrics_list = []
-    # # set metric dict for every single task. 
-    # for i, image_batch in enumerate(train_loader):
-    #     channels = image_batch['class_label'].size()[1]
-    #     metrics_list = split_metrics(channels, metrics)
-    #     break
-    
+   
     for i, image_batch in enumerate(train_loader):
         logits = model(image_batch['image'])
         total_loss = 0
-        # logits_loss = logits.view(logits.size()[0]*logits.size()[1], logits.size()[2])
-        # labels = image_batch['class_label'].view(image_batch['class_label'].size()[0]*image_batch['class_label'].size()[1], image_batch['class_label'].size()[2])
         logits_loss = logits
         labels = image_batch['class_label']
         for name in loss_functions:
@@ -52,13 +44,6 @@ def train_one_epoch(model: torch.nn.Module, loss_functions: Dict[str, torch.nn.m
             loss = loss_functions[name](logits_loss, labels.float())
             accelerator.log({'Train/' + name: float(loss)}, step=step)
             total_loss += alpth * loss
-        
-        # val_outputs = post_trans(logits)
-        # for j in range(image_batch['class_label'].size()[1]):
-        #     pred_channel = val_outputs[:, j, :].unsqueeze(1)  # shape: (batch_size, 1)
-        #     label_channel = image_batch['class_label'][:, j, :].unsqueeze(1)  # shape: (batch_size, 1)
-        #     for metric_name in metrics:
-        #         metrics_list[j][metric_name](y_pred=pred_channel, y=label_channel)
         
         for metric_name in metrics:
             y_pred = post_trans(logits)
@@ -118,25 +103,13 @@ def val_one_epoch(model: torch.nn.Module,
         flag = 'Test'
     else:
         flag = 'Val'
-    # metrics_list = []
-    # # set metric dict for every single task. 
-    # for i, image_batch in enumerate(val_loader):
-    #     channels = image_batch['class_label'].size()[1]
-    #     metrics_list = split_metrics(channels, metrics)
-    #     break
-    
-    # if metrics_list == []:
-    #     accelerator.print('Val Error!')
-    #     return {}, step
     
     for i, image_batch in enumerate(val_loader):
         # logits = inference(model, image_batch['image'])
         logits = model(image_batch['image'])  # some moedls can not accepted inference, I do not know why.
         log = ''
         total_loss = 0
-        # class for loss compute, need to connect a tensor.
-        # logits_loss = logits.view(logits.size()[0]*logits.size()[1], logits.size()[2])
-        # labels_loss = image_batch['class_label'].view(image_batch['class_label'].size()[0]*image_batch['class_label'].size()[1], image_batch['class_label'].size()[2])
+        
         logits_loss = logits
         labels_loss = image_batch['class_label']
         
@@ -150,14 +123,7 @@ def val_one_epoch(model: torch.nn.Module,
             f'{flag}/Total Loss': float(total_loss),
         }, step=step)
         
-        # compute metrics, but need to compute for every single task.
-        # val_outputs = post_trans(logits)
         
-        # for j in range(image_batch['class_label'].size()[1]):
-        #     pred_channel = val_outputs[:, j, :].unsqueeze(1)  # shape: (batch_size, 1)
-        #     label_channel = image_batch['class_label'][:, j, :].unsqueeze(1)  # shape: (batch_size, 1)
-        #     for metric_name in metrics:
-        #         metrics_list[j][metric_name](y_pred=pred_channel, y=label_channel)
         for metric_name in metrics:
             y_pred = post_trans(logits)
             y = labels_loss
@@ -187,14 +153,6 @@ def val_one_epoch(model: torch.nn.Module,
                 f'{flag}/{metric_name}': float(batch_acc.mean()),
             })
             
-    # for metric_name in metrics:
-    #     all_data = []
-    #     for key in metric.keys():
-    #         if metric_name in key:
-    #             all_data.append(metric[key])
-    #     me_data = sum(all_data) / len(all_data)        
-    #     metric.update({f'{flag}/{metric_name}': float(me_data)})
-        
     accelerator.log(metric, step=epoch)
     return metric, step
 

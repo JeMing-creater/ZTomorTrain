@@ -418,13 +418,7 @@ class HWAUNETR(nn.Module):
         self.hidden_downsample = nn.Conv3d(dims[3], hidden_size, kernel_size=2, stride=2)
         
         self.decoder = Decoder(in_channels=hidden_size, num_tasks=num_tasks, dims=dims)
-        # self.TSconv1 = TransposedConvLayer(dim_in=hidden_size, dim_out=dims[3], head=heads[3], r=2)
         
-        # self.TSconv2 = TransposedConvLayer(dim_in=dims[3], dim_out=dims[2], head=heads[2], r=kernel_sizes[3])
-        # self.TSconv3 = TransposedConvLayer(dim_in=dims[2], dim_out=dims[1], head=heads[1], r=kernel_sizes[2])
-        # self.TSconv4 = TransposedConvLayer(dim_in=dims[1], dim_out=dims[0], head=heads[0], r=kernel_sizes[1])
-
-        # self.SegHead = nn.ConvTranspose3d(dims[0],out_chans,kernel_size=kernel_sizes[0],stride=kernel_sizes[0])
         
     def forward(self, x):
         # x = self.fussion(x)
