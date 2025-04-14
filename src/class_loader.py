@@ -1,3 +1,4 @@
+from calendar import c
 import os
 import math
 import yaml
@@ -18,56 +19,8 @@ from monai.transforms import (
     LoadImaged, MapTransform, ScaleIntensityRanged, EnsureChannelFirstd, Spacingd, Orientationd,ResampleToMatchd, ResizeWithPadOrCropd, Resize, Resized, RandFlipd, NormalizeIntensityd, ToTensord,RandScaleIntensityd,RandShiftIntensityd
 )
 
-def read_csv(config):
-    def change_p(use_Pathology):
-        keep_pathology = [0,0,0,0,0,0]
-        if 'SMI' in use_Pathology:
-            keep_pathology[0] = 1
-        if 'LNM' in use_Pathology:
-            keep_pathology[1] = 1
-        if 'VI' in use_Pathology:
-            keep_pathology[2] = 1
-        if 'NBI' in use_Pathology:
-            keep_pathology[3] = 1
-        if 'HER2' in use_Pathology:
-            keep_pathology[4] = 1
-        if 'KI67' in use_Pathology:
-            keep_pathology[5] = 1
-        return keep_pathology
-    
-    csv_path = config.loader.csvPath
-    use_Pathology = config.loader.checkPathology
-    retention_list = change_p(use_Pathology)
-    # 定义dtype转换，将第二列（索引为1）读作str
-    dtype_converters = {1: str}
-    
-    df = pd.read_excel(csv_path, engine='openpyxl', dtype=dtype_converters)
-    
-    # 创建空字典
-    content_dict = {}
-    # 遍历DataFrame的每一行，从第二行开始
-    for index, row in df.iterrows():
-        # if index == 0:
-        #     continue  # 跳过第一行
-        
-        key = row[1]  # 第2列作为键
-        values = row[2:8].tolist()  # 第3-8列的数据读为列表
-        
-        content_dict[key] = values
-    
-    # 把nan值改换为0
-    for key in content_dict.keys():
-        new_dict = [data for data, retain in zip(content_dict[key], retention_list) if retain == 1]
-        
-        for i in range(len(new_dict)):
-            if np.isnan(new_dict[i]):
-                new_dict[i] = 0.0
-        content_dict[key] = new_dict
-        
-    return content_dict
-
 def read_csv_for_PM(config):
-    csv_path = config.loader.csvPath
+    csv_path = config.loader.root + '/' + 'Classification.xlsx'
     # 定义dtype转换，将第二列（索引为1）读作str
     dtype_converters = {1: str}
     
@@ -129,9 +82,7 @@ def load_MR_dataset_images(root, use_data, use_models, use_data_dict):
 
 def get_transforms(config: EasyDict) -> Tuple[
     monai.transforms.Compose, monai.transforms.Compose]:
-    
     load_transform = []
-    
     for model_scale in config.loader.model_scale:
         load_transform.append(
             monai.transforms.Compose([
@@ -291,8 +242,47 @@ def calculate_label_ratio(train_loader):
     
     return [a_ratio, b_ratio]
 
+def check_example(data):
+    index = []
+    for d in data:
+        num = d['image'][0].split('/')[-1].split('.')[0]
+        index.append(num)
+    return index
+
+def split_examples_to_data(data, config):
+    def read_file_to_list(file_path):
+        with open(file_path, 'r', encoding='utf-8') as file:
+            lines = file.readlines()
+            # 去除每行末尾的换行符
+        lines = [line.strip() for line in lines]
+        return lines
+
+    def select_example_to_data(data, example_list):
+        selected_data = []
+        for d in data:
+            num = d['image'][0].split('/')[-1].split('.')[0]
+            if num in example_list:
+                selected_data.append(d)
+        return selected_data
+
+    train_example = config.loader.root + '/' + 'train_examples.txt'
+    val_example = config.loader.root + '/' + 'val_examples.txt'
+    test_example = config.loader.root + '/' + 'test_examples.txt'
+
+    train_list = read_file_to_list(train_example)
+    val_list = read_file_to_list(val_example)
+    test_list = read_file_to_list(test_example)
+
+    train_data = select_example_to_data(data, train_list)
+    val_data = select_example_to_data(data, val_list)
+    test_data = select_example_to_data(data, test_list)
+
+    return train_data, val_data, test_data 
+    
+
 def get_dataloader(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
-    datapath = config.loader.dataPath
+    root = config.loader.root
+    datapath = root + '/' + 'ALL' + '/'
     use_models = config.loader.checkModels
     
     # data1: 腹膜转移分类; data2: 淋巴结同时序（手术）; data3: 淋巴结异时序（化疗后）
@@ -312,16 +302,23 @@ def get_dataloader(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, torch
     
     load_transform, train_transform, val_transform = get_transforms(config)
     
-    # shuffle data for objective verification
-    random.shuffle(data)
+    if config.loader.fix_example == True:
+        train_data, val_data, test_data = split_examples_to_data(data, config)
+    else:
+        # shuffle data for objective verification
+        random.shuffle(data)
 
-    train_data, val_data, test_data = split_list(data, [config.loader.train_ratio, config.loader.val_ratio, config.loader.test_ratio]) 
+        train_data, val_data, test_data = split_list(data, [config.loader.train_ratio, config.loader.val_ratio, config.loader.test_ratio]) 
 
-    # if not need test, can use fusion to fuse two data
-    if config.loader.fusion == True:
-        need_val_data = val_data + test_data
-        val_data = need_val_data
-        test_data = need_val_data
+        # if not need test, can use fusion to fuse two data
+        if config.loader.fusion == True:
+            need_val_data = val_data + test_data
+            val_data = need_val_data
+            test_data = need_val_data
+
+    train_example = check_example(train_data)
+    val_example = check_example(val_data)
+    test_example = check_example(test_data)
 
     train_dataset = MultiModalityDataset(data=train_data, over_label=config.loader.over_label, over_add = config.loader.over_add, 
                                          loadforms = load_transform,
@@ -340,10 +337,10 @@ def get_dataloader(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, torch
     test_loader = monai.data.DataLoader(test_dataset, num_workers=config.loader.num_workers, 
                                        batch_size=config.trainer.batch_size, shuffle=False)
     
-    return train_loader, val_loader, test_loader
+    return train_loader, val_loader, test_loader, (train_example, val_example, test_example)
 
 def check_loader(config):
-    train_loader, val_loader, test_loader = get_dataloader(config)
+    train_loader, val_loader, test_loader, _ = get_dataloader(config)
     
     for i, batch in enumerate(train_loader):
         try:

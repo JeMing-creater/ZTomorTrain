@@ -329,9 +329,9 @@ class HWABlock(nn.Module):
         return x
 
 
-class Decoder(nn.Module):
-    def __init__(self, in_channels, num_tasks, dims):
-        super(Decoder, self).__init__()
+class ClassDecoder(nn.Module):
+    def __init__(self, in_channels, dims):
+        super(ClassDecoder, self).__init__()
         
         # 定义解码器各层
         self.up1 = nn.Sequential(
@@ -406,35 +406,51 @@ class Decoder(nn.Module):
 
         return concatenated_output
 
-         
-class HWAUNETR(nn.Module):
-    def __init__(self, in_chans=4, num_tasks=2, fussion = [1,2,4,8], kernel_sizes=[4, 2, 2, 2], depths=[1, 1, 1, 1], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8],
+
+class SegDecoder(nn.Module):
+    def __init__(self, out_chans, hidden_size, dims, heads, kernel_sizes=[4, 2, 2, 2], ):
+        super(SegDecoder, self).__init__()
+        self.TSconv1 = TransposedConvLayer(dim_in=hidden_size, dim_out=dims[3], head=heads[3], r=2)
+        
+        self.TSconv2 = TransposedConvLayer(dim_in=dims[3], dim_out=dims[2], head=heads[2], r=kernel_sizes[3])
+        self.TSconv3 = TransposedConvLayer(dim_in=dims[2], dim_out=dims[1], head=heads[1], r=kernel_sizes[2])
+        self.TSconv4 = TransposedConvLayer(dim_in=dims[1], dim_out=dims[0], head=heads[0], r=kernel_sizes[1])
+
+        self.SegHead = nn.ConvTranspose3d(dims[0],out_chans,kernel_size=kernel_sizes[0],stride=kernel_sizes[0])
+
+    def forward(self, deep_feature, feature_out):
+        x = self.TSconv1(deep_feature, feature_out[-1])
+        x = self.TSconv2(x, feature_out[-2])
+        x = self.TSconv3(x, feature_out[-3])
+        x = self.TSconv4(x, feature_out[-4])
+        x = self.SegHead(x)
+        return x
+
+class FMUNETR(nn.Module):
+    def __init__(self, in_chans=3, out_chans=3, fussion = [1,2,4,8], kernel_sizes=[4, 2, 2, 2], depths=[1, 1, 1, 1], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8],
                 out_indices=[0, 1, 2, 3]):
-        super(HWAUNETR, self).__init__()
+        super(FMUNETR, self).__init__()
         # self.fussion = HWABlock(in_chans=in_chans, kernel_sizes = fussion,  d_state = 16, d_conv = 4, expand = 2, num_slices = num_slices_list[0])
         self.Encoder = Encoder(in_chans=in_chans, kernel_sizes=kernel_sizes, depths=depths, dims=dims, num_slices_list = num_slices_list,
                 out_indices=out_indices, heads=heads)
 
         self.hidden_downsample = nn.Conv3d(dims[3], hidden_size, kernel_size=2, stride=2)
         
-        self.decoder = Decoder(in_channels=hidden_size, num_tasks=num_tasks, dims=dims)
+        self.class_decoder = ClassDecoder(in_channels=hidden_size, dims=dims)
         
+        self.seg_decoder = SegDecoder(out_chans, hidden_size, dims, heads, kernel_sizes)
+
         
     def forward(self, x):
-        # x = self.fussion(x)
         
         outs, feature_out = self.Encoder(x)
         
         deep_feature = self.hidden_downsample(outs)
         
-        x = self.decoder(deep_feature, feature_out)
-        # x = self.TSconv1(deep_feature, feature_out[-1])
-        # x = self.TSconv2(x, feature_out[-2])
-        # x = self.TSconv3(x, feature_out[-3])
-        # x = self.TSconv4(x, feature_out[-4])
-        # x = self.SegHead(x)
+        class_x = self.class_decoder(deep_feature, feature_out)
+        seg_x = self.seg_decoder(deep_feature, feature_out)
         
-        return x
+        return class_x, seg_x
     
 def test_weight(model, x):
     for i in range(0, 3):
@@ -456,12 +472,12 @@ def Unitconversion(flops, params, throughout):
 
 if __name__ == '__main__':
     device = 'cuda'
-    # x = torch.randn(size=(1, 4, 96, 96, 96)).to(device)
-    # x = torch.randn(size=(1, 4, 128, 128, 128)).to(device)
     x = torch.randn(size=(2, 3, 128, 128, 64)).to(device)
-    # model = SegMamba(in_chans=4,out_chans=3).to(device)
     
-    model = HWAUNETR(in_chans=3, num_tasks=2, fussion = [1, 2, 4, 8], kernel_sizes=[4, 2, 2, 2], depths=[2, 2, 2, 2], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8], out_indices=[0, 1, 2, 3]).to(device)
+    model = FMUNETR(in_chans=3, out_chans=3, fussion = [1, 2, 4, 8], kernel_sizes=[4, 2, 2, 2], depths=[2, 2, 2, 2], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8], out_indices=[0, 1, 2, 3]).to(device)
 
-    print(model(x).shape)
+    class_x, seg_x = model(x)
+
+    print(class_x.shape)   
+    print(seg_x.shape)   
     
