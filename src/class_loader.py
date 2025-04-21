@@ -56,6 +56,18 @@ def read_csv_for_PM(config):
 
     return content_dict1, content_dict2, content_dict3
 
+def read_usedata(file_path):
+    read_flas = False
+    with open(file_path, 'r', encoding='utf-8') as file:
+        for line in file:
+            if read_flas == True:
+                result = line.replace('\n', '').split(',')
+                result = [data.replace(' ', '') for data in result]
+                return result
+            elif 'Useful data' in line:
+                read_flas = True
+                continue
+
 def load_MR_dataset_images(root, use_data, use_models, use_data_dict):
     images_path = os.listdir(root)
     images_list = []

@@ -14,9 +14,9 @@ from objprint import objstr
 from timm.optim import optim_factory
 
 from src import utils
-from src.loader import get_dataloader
+from src.class_loader import get_dataloader
 from src.optimizer import LinearWarmupCosineAnnealingLR
-from src.utils import Logger, resume_train_state
+from src.utils import Logger, resume_train_state, write_example
 
 from src.model.HWAUNETR import HWAUNETR
 from monai.networks.nets import SwinUNETR
@@ -142,7 +142,11 @@ if __name__ == '__main__':
     #     feature_size=48)
     
     accelerator.print('load dataset...')
-    train_loader, val_loader, test_loader = get_dataloader(config)
+    train_loader, val_loader, test_loader, example = get_dataloader(config)
+
+    # keep example log
+    if accelerator.is_main_process == True:
+        write_example(example, logging_dir)
     
     inference = monai.inferers.SlidingWindowInferer(roi_size=config.loader.target_size, overlap=0.5,
                                                     sw_device=accelerator.device, device=accelerator.device)

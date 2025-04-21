@@ -16,7 +16,7 @@ from objprint import objstr
 from timm.optim import optim_factory
 
 from src import utils
-from src.loader import get_dataloader, get_transforms, read_usedata, load_MR_dataset_images
+from src.class_loader import get_dataloader, get_transforms, read_usedata, load_MR_dataset_images
 from src.optimizer import LinearWarmupCosineAnnealingLR
 from src.utils import Logger, load_pretrain_model, MetricSaver, load_model_dict, resume_train_state, ensure_directory_exists
 

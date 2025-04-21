@@ -11,19 +11,7 @@ trainer:
   weight_decay_end: 0.04
 
 finetune:
-  checkpoint: FMUNETR_single_modal_T2
-
-data_check:
-  dataPath1: /workspace/Jeming/data/NonsurgicalMR
-  dataPath2: /workspace/Jeming/data/SurgicalMR
-  writePath: data
-  # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ["ADC", "T2_FS"]
-  lowestResolution: [200, 200]
-  lowestSize: 500
-  is_align: False
-  is_Resolution: True
-  is_Size: True
+  checkpoint: FMUNETR_multimodals_ADC_T2
 
 loader:
   train_ratio: 0.7
@@ -45,7 +33,7 @@ loader:
   leapfrog: []
   root: /root/.cache/huggingface/forget/datasets/MeiMRNew/
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ["T2_FS"]
+  checkModels: ["ADC", "T2_FS"]
   model_scale: [[0, 6000], [0, 4500], [0, 4500]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
 
