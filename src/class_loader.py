@@ -282,8 +282,11 @@ def split_examples_to_data(data, config):
     test_example = config.loader.root + '/' + 'test_examples.txt'
 
     train_list = read_file_to_list(train_example)
+    print(f'Loading examples from {train_example}')
     val_list = read_file_to_list(val_example)
+    print(f'Loading examples from {val_example}')
     test_list = read_file_to_list(test_example)
+    print(f'Loading examples from {test_example}')
 
     train_data = select_example_to_data(data, train_list)
     val_data = select_example_to_data(data, val_list)
@@ -319,6 +322,7 @@ def get_dataloader(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, torch
     else:
         # shuffle data for objective verification
         random.shuffle(data)
+        print('Random Loading!')
 
         train_data, val_data, test_data = split_list(data, [config.loader.train_ratio, config.loader.val_ratio, config.loader.test_ratio]) 
 

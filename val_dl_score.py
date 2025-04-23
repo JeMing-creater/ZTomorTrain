@@ -170,7 +170,7 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
             
             # 遍历字典并写入键值对
             for key, value in dl_score.items():
-                writer.writerow([str(key), value, lable_score[key]])
+                writer.writerow([str(key)+'\t', value, lable_score[key]])
 
     train_example, val_example, test_example = examples
     tr_dl_score,  tr_label  = compute_for_sinlge_example(post_trans, train_example)
@@ -229,6 +229,6 @@ if __name__ == '__main__':
 
     # start valing
     accelerator.print("Start Valing! ")
-    val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
+    # val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
     compute_dl_score_for_example(model, config, post_trans, example)
 

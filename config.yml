@@ -11,7 +11,8 @@ trainer:
   weight_decay_end: 0.04
 
 finetune:
-  checkpoint: FMUNETR_multimodals_ADC_T2
+  # checkpoint: TFMUNETR_multimodals_ADC_T2
+  checkpoint: TFMUNETR_multimodals_T2
 
 loader:
   train_ratio: 0.7
@@ -23,7 +24,7 @@ loader:
   over_label: False
   over_add: 10
   # use this flag can fix experiment examples, must set train_example.txt, val_example.txt and test_example.txt to root.
-  fix_example: True
+  fix_example: False
   # task: for different task: PM(腹膜转移分类) ; NL_SS(淋巴结同时序（手术）); NL_DS(淋巴结异时序（化疗后）)
   task: PM
   # task: NL_SS
@@ -33,7 +34,7 @@ loader:
   leapfrog: []
   root: /root/.cache/huggingface/forget/datasets/MeiMRNew/
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ["ADC", "T2_FS"]
+  checkModels: ["T2_FS"]
   model_scale: [[0, 6000], [0, 4500], [0, 4500]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
 
@@ -42,6 +43,9 @@ BraTS_loader:
   num_workers: 0
   image_size: 128
   dataPath: /dataset/cv/seg/BRaTS2021/
+
+valer:
+  dl_score_csv_path: score
 
 visualization:
   image_path: img
