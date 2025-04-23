@@ -168,8 +168,15 @@ if __name__ == '__main__':
     
     accelerator.print('load model...')
     # model = MultiTaskSwinUNETR(img_size=config.loader.target_size, in_channels=3, num_tasks=len(config.loader.checkPathology), num_classes_per_task=1)
-    model = HWAUNETR(in_chans=len(config.loader.checkModels), fussion = [1,2,4,8], kernel_sizes=[4, 2, 2, 2], depths=[1, 1, 1, 1], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8],
-                out_indices=[0, 1, 2, 3])
+    model = HWAUNETR(in_chans=len(config.loader.checkModels), 
+                     fussion = [1,2,4,8], 
+                     kernel_sizes=[4, 2, 2, 2], 
+                     depths=[1, 1, 1, 1], 
+                     dims=[48, 96, 192, 384], 
+                     heads=[1, 2, 4, 4], 
+                     hidden_size=768, 
+                     num_slices_list = [64, 32, 16, 8], 
+                     out_indices=[0, 1, 2, 3])
     accelerator.print('load dataset...')
     train_loader, val_loader, test_loader, example = get_dataloader(config)
 

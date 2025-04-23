@@ -1,6 +1,7 @@
 img
 data
 logs
+score
 SegMamba
 __pycache__
 model_store
