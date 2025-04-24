@@ -166,8 +166,8 @@ def load_MR_dataset_images(root, use_data, use_models, use_data_dict={}):
                 else:
                     label.append(root + '/' + path + '/' + model + '/' + path + 'seg.nii.gz')
         
-        if image == []:
-            print(f"{path} does not have image file. ")
+        if image == [] or len(image) < len(use_models):
+            print(f"{path} does not have image file or not enough modals. ")
             lack_model_flag = True
 
         if lack_flag == False and lack_model_flag == False:
