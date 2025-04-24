@@ -181,9 +181,13 @@ if __name__ == '__main__':
     val_step = 0
     best_score = torch.tensor(0)
     best_hd95 = torch.tensor(1000)
+    best_test_score = torch.tensor(0)
+    best_test_hd95 = torch.tensor(1000)
     starting_epoch = 0
     best_metrics = []
     best_hd95_metrics = []
+    best_test_metrics = []
+    best_test_hd95_metrics = []
     
     if config.trainer.resume:
         model, optimizer, scheduler, starting_epoch, train_step, best_score, best_metrics, best_hd95, best_hd95_metrics = utils.resume_train_state(model, '{}'.format(
