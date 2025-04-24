@@ -2,7 +2,7 @@ trainer:
   num_epochs: 300
   val_epochs: 10
   warmup: 2
-  batch_size: 1
+  batch_size: 2
   resume: True
   lr: 0.001
   min_lr: 0.0000001
@@ -12,7 +12,8 @@ trainer:
 
 finetune:
   # checkpoint: TFMUNETR_multimodals_ADC_T2
-  checkpoint: TFMUNETR_multimodals_T2
+  # checkpoint: TFMUNETR_multimodals_ADC_T2
+  checkpoint: TFMUNETR_multimodals_GCNC
 
 GCM_loader:
   train_ratio: 0.7
@@ -34,7 +35,7 @@ GCM_loader:
   leapfrog: []
   root: /root/.cache/huggingface/forget/datasets/MeiMRNew/
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ["T2_FS"]
+  checkModels: ['ADC', 'T2_FS']
   model_scale: [[0, 6000], [0, 4500], [0, 4500]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
 
