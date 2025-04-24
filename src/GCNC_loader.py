@@ -19,8 +19,47 @@ from monai.transforms import (
     LoadImaged, MapTransform, ScaleIntensityRanged, EnsureChannelFirstd, Spacingd, Orientationd,ResampleToMatchd, ResizeWithPadOrCropd, Resize, Resized, RandFlipd, NormalizeIntensityd, ToTensord,RandScaleIntensityd,RandShiftIntensityd
 )
 
+class ConvertToMultiChannelBasedOnBratsClassesd_For_BraTS(monai.transforms.MapTransform):
+    """
+    TC WT ET
+    Dictionary-based wrapper of :py:class:`monai.transforms.ConvertToMultiChannelBasedOnBratsClasses`.
+    Convert labels to multi channels based on brats18 classes:
+    label 1 is the necrotic and non-enhancing tumor core
+    label 2 is the peritumoral edema
+    label 4 is the GD-enhancing tumor
+    The possible classes are TC (Tumor core), WT (Whole tumor)
+    and ET (Enhancing tumor).
+    """
+
+    backend = [monai.utils.TransformBackends.TORCH, monai.utils.TransformBackends.NUMPY]
+
+    def __init__(self, keys: monai.config.KeysCollection, is2019: bool = False, allow_missing_keys: bool = False):
+        super().__init__(keys, allow_missing_keys)
+        self.is2019 = is2019
+
+    def converter(self, img: monai.config.NdarrayOrTensor):
+        # TC WT ET
+        # if img has channel dim, squeeze it
+        if img.ndim == 4 and img.shape[0] == 1:
+            img = img.squeeze(0)
+        if self.is2019:
+            result = [(img == 2) | (img == 3), (img == 1) | (img == 2) | (img == 3), (img == 2)]
+        else:
+            # TC WT ET
+            result = [(img == 1) | (img == 4), (img == 1) | (img == 4) | (img == 2), img == 4]
+            # merge labels 1 (tumor non-enh) and 4 (tumor enh) and 2 (large edema) to WT
+            # label 4 is ET
+        return torch.stack(result, dim=0) if isinstance(img, torch.Tensor) else np.stack(result, axis=0)
+
+    def __call__(self, data: Mapping[Hashable, monai.config.NdarrayOrTensor]) -> Dict[
+        Hashable, monai.config.NdarrayOrTensor]:
+        d = dict(data)
+        for key in self.key_iterator(d):
+            d[key] = self.converter(d[key])
+        return d
+
 def read_csv_for_PM(config):
-    csv_path = config.loader.root + '/' + 'Classification.xlsx'
+    csv_path = config.GCM_loader.root + '/' + 'Classification.xlsx'
     # 定义dtype转换，将第二列（索引为1）读作str
     dtype_converters = {1: str}
     
@@ -92,15 +131,31 @@ def load_MR_dataset_images(root, use_data, use_models, use_data_dict):
             })           
     return images_list
 
-def get_transforms(config: EasyDict) -> Tuple[
+def load_brats2021_dataset_images(root):
+    images_path = os.listdir(root)
+    images_list = []
+    for path in images_path:
+        image_path = root + '/' + path + '/' + path
+        flair_img = image_path + '_flair.nii.gz'
+        t1_img = image_path + '_t1.nii.gz'
+        t1ce_img = image_path + '_t1ce.nii.gz'
+        t2_img = image_path + '_t2.nii.gz'
+        seg_img = image_path + '_seg.nii.gz'
+        images_list.append({
+            'image': [flair_img, t1_img, t1ce_img, t2_img],
+            'label': seg_img
+        })
+    return images_list
+
+def get_GCM_transforms(config: EasyDict) -> Tuple[
     monai.transforms.Compose, monai.transforms.Compose]:
     load_transform = []
-    for model_scale in config.loader.model_scale:
+    for model_scale in config.GCM_loader.model_scale:
         load_transform.append(
             monai.transforms.Compose([
                 LoadImaged(keys=["image", "label"], image_only=False, simple_keys=True),
                 EnsureChannelFirstd(keys=["image", "label"]),
-                Resized(keys=["image", "label"], spatial_size=config.loader.target_size, mode=("trilinear", "nearest-exact")),
+                Resized(keys=["image", "label"], spatial_size=config.GCM_loader.target_size, mode=("trilinear", "nearest-exact")),
                 
                 ScaleIntensityRanged(
                         keys=["image"],  # 对图像应用变换
@@ -129,37 +184,46 @@ def get_transforms(config: EasyDict) -> Tuple[
     ])
     return load_transform, train_transform, val_transform
 
-def extract_and_resize(image, label, over_add=0):
-    # 获取label中值为1的点的坐标
-    indices = torch.nonzero(label[0])  # 去掉batch维度，找到非零索引
-    
-    # 找到最长的维度
-    max_size = max(image[0].shape[0], image[0].shape[1], image[0].shape[2])
-    
-    # 计算各个维度上的 over_add，按比例缩小较短维度的扩展量
-    over_add_x = round(over_add * (image[0].shape[0] / max_size))
-    over_add_y = round(over_add * (image[0].shape[1] / max_size))
-    over_add_z = round(over_add * (image[0].shape[2] / max_size))
-    
-    # 获取在每个维度上的最小和最大索引
-    min_x, min_y, min_z = indices.min(dim=0).values.tolist()
-    max_x, max_y, max_z = indices.max(dim=0).values.tolist()
-    
-    # 计算扩展后的坐标，并限制在合法范围内
-    min_x = max(0, min_x - over_add_x)
-    max_x = min(image[0].shape[0]-1, max_x + over_add_x)
-    min_y = max(0, min_y - over_add_y)
-    max_y = min(image[0].shape[1]-1, max_y + over_add_y)
-    min_z = max(0, min_z - over_add_z)
-    max_z = min(image[0].shape[2]-1, max_z + over_add_z)
-    
-    # 切割image和label
-    cropped_image = image[:, min_x:max_x+1, min_y:max_y+1, min_z:max_z+1]
-    
-    # 直接使用 interpolate 进行 resize 到 (1, 128, 128, 64)
-    # resized_image = F.interpolate(cropped_image.unsqueeze(0), size=(128, 128, 64), mode='trilinear', align_corners=False).squeeze(0)
-    resized_image = monai.transforms.Resize(spatial_size=(label.shape[1],label.shape[2],label.shape[3]), mode=("trilinear"))(cropped_image)
-    return resized_image
+def get_Brats_transforms(config: EasyDict) -> Tuple[
+    monai.transforms.Compose, monai.transforms.Compose]:
+    train_transform = monai.transforms.Compose([
+        monai.transforms.LoadImaged(keys=["image", "label"]),
+        monai.transforms.EnsureChannelFirstd(keys="image"),
+        monai.transforms.EnsureTyped(keys=["image", "label"]),
+        ConvertToMultiChannelBasedOnBratsClassesd_For_BraTS(keys=["label"], is2019=False),
+        monai.transforms.Orientationd(keys=["image", "label"], axcodes="RAS"),
+        monai.transforms.SpatialPadD(keys=["image", "label"], spatial_size=(255, 255, config.BraTS_loader.image_size),
+                                     method='symmetric', mode='constant'),
+
+        monai.transforms.Spacingd(keys=["image", "label"], pixdim=(1.0, 1.0, 1.0), mode=("bilinear", "nearest")),
+        monai.transforms.CenterSpatialCropD(keys=["image", "label"],
+                                            roi_size=ensure_tuple_rep(config.BraTS_loader.image_size, 3)),
+
+        # monai.transforms.Resized(keys=["image", "label"], spatial_size=ensure_tuple_rep(config.model.image_size, 3)),
+        monai.transforms.RandCropByPosNegLabeld(keys=["image", "label"], label_key="label", num_samples=2,
+                                                spatial_size=ensure_tuple_rep(config.BraTS_loader.image_size, 3), pos=1,
+                                                neg=1,
+                                                image_key="image", image_threshold=0),
+        # monai.transforms.RandSpatialCropd(keys=["image", "label"], roi_size=config.model.image_size, random_size=False),
+        monai.transforms.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
+        monai.transforms.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
+        monai.transforms.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
+        monai.transforms.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+        monai.transforms.RandScaleIntensityd(keys="image", factors=0.1, prob=1.0),
+        monai.transforms.RandShiftIntensityd(keys="image", offsets=0.1, prob=1.0),
+        monai.transforms.ToTensord(keys=["image", "label"]),
+    ])
+    val_transform = monai.transforms.Compose([
+        monai.transforms.LoadImaged(keys=["image", "label"]),
+        monai.transforms.EnsureChannelFirstd(keys="image"),
+        monai.transforms.EnsureTyped(keys=["image", "label"]),
+        ConvertToMultiChannelBasedOnBratsClassesd_For_BraTS(keys="label", is2019=False),
+        monai.transforms.Orientationd(keys=["image", "label"], axcodes="RAS"),
+        monai.transforms.Spacingd(keys=["image", "label"], pixdim=(1.0, 1.0, 1.0), mode=("bilinear", "nearest")),
+        # monai.transforms.Resized(keys=["image", "label"], spatial_size=ensure_tuple_rep(config.model.image_size, 3)),
+        monai.transforms.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+    ])
+    return train_transform, val_transform
 
 class MultiModalityDataset(monai.data.Dataset):
     def __init__(self, data, loadforms, transforms, over_label=False, over_add=0):
@@ -168,7 +232,39 @@ class MultiModalityDataset(monai.data.Dataset):
         self.loadforms = loadforms
         self.over_label = over_label
         self.over_add = over_add
+    
+    def extract_and_resize(self, image, label, over_add=0):
+        # 获取label中值为1的点的坐标
+        indices = torch.nonzero(label[0])  # 去掉batch维度，找到非零索引
         
+        # 找到最长的维度
+        max_size = max(image[0].shape[0], image[0].shape[1], image[0].shape[2])
+        
+        # 计算各个维度上的 over_add，按比例缩小较短维度的扩展量
+        over_add_x = round(over_add * (image[0].shape[0] / max_size))
+        over_add_y = round(over_add * (image[0].shape[1] / max_size))
+        over_add_z = round(over_add * (image[0].shape[2] / max_size))
+        
+        # 获取在每个维度上的最小和最大索引
+        min_x, min_y, min_z = indices.min(dim=0).values.tolist()
+        max_x, max_y, max_z = indices.max(dim=0).values.tolist()
+        
+        # 计算扩展后的坐标，并限制在合法范围内
+        min_x = max(0, min_x - over_add_x)
+        max_x = min(image[0].shape[0]-1, max_x + over_add_x)
+        min_y = max(0, min_y - over_add_y)
+        max_y = min(image[0].shape[1]-1, max_y + over_add_y)
+        min_z = max(0, min_z - over_add_z)
+        max_z = min(image[0].shape[2]-1, max_z + over_add_z)
+        
+        # 切割image和label
+        cropped_image = image[:, min_x:max_x+1, min_y:max_y+1, min_z:max_z+1]
+        
+        # 直接使用 interpolate 进行 resize 到 (1, 128, 128, 64)
+        # resized_image = F.interpolate(cropped_image.unsqueeze(0), size=(128, 128, 64), mode='trilinear', align_corners=False).squeeze(0)
+        resized_image = monai.transforms.Resize(spatial_size=(label.shape[1],label.shape[2],label.shape[3]), mode=("trilinear"))(cropped_image)
+        return resized_image
+    
     def __len__(self):
         return len(self.data)
 
@@ -186,7 +282,7 @@ class MultiModalityDataset(monai.data.Dataset):
             combined_data[f'model_{i}_image'] = globals()[f'data_{i}']['image']
             combined_data[f'model_{i}_label'] = globals()[f'data_{i}']['label']
 
-            imgae = extract_and_resize(combined_data[f'model_{i}_image'], combined_data[f'model_{i}_label'], self.over_add)
+            imgae = self.extract_and_resize(combined_data[f'model_{i}_image'], combined_data[f'model_{i}_label'], self.over_add)
             combined_data[f'model_{i}_image'] = imgae
             
         images = []
@@ -221,39 +317,6 @@ def split_list(data, ratios):
     
     return parts
 
-def calculate_ratio(input_dict):
-    total_zeros = 0
-    total_ones = 0
-    total_elements = 0
-    
-    for value in input_dict.values():
-        total_zeros += value.count(0)
-        total_ones += value.count(1)
-        total_elements += len(value)
-    
-    ratio_zeros = total_zeros / total_elements if total_elements > 0 else 0
-    ratio_ones = total_ones / total_elements if total_elements > 0 else 0
-    
-    return {'0': ratio_zeros, '1': ratio_ones}
-
-def calculate_label_ratio(train_loader):
-    total_zeros = 0
-    total_ones = 0
-    total_labels = 0
-
-    # 遍历 train_loader 中的所有批次
-    for i, batch in enumerate(train_loader):
-        labels = batch['class_label']
-        total_zeros += (labels == 0).sum().item()  # 统计标签为0的数量
-        total_ones += (labels == 1).sum().item()   # 统计标签为1的数量
-        # total_labels += labels.size(0)             # 统计标签的总数量
-
-    total = total_zeros + total_ones
-    a_ratio = total_zeros / total
-    b_ratio = total_ones / total
-    
-    return [a_ratio, b_ratio]
-
 def check_example(data):
     index = []
     for d in data:
@@ -277,9 +340,9 @@ def split_examples_to_data(data, config):
                 selected_data.append(d)
         return selected_data
 
-    train_example = config.loader.root + '/' + 'train_examples.txt'
-    val_example = config.loader.root + '/' + 'val_examples.txt'
-    test_example = config.loader.root + '/' + 'test_examples.txt'
+    train_example = config.GCM_loader.root + '/' + 'train_examples.txt'
+    val_example = config.GCM_loader.root + '/' + 'val_examples.txt'
+    test_example = config.GCM_loader.root + '/' + 'test_examples.txt'
 
     train_list = read_file_to_list(train_example)
     print(f'Loading examples from {train_example}')
@@ -294,40 +357,39 @@ def split_examples_to_data(data, config):
 
     return train_data, val_data, test_data 
     
-
-def get_dataloader(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
-    root = config.loader.root
+def get_dataloader_GCM(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
+    root = config.GCM_loader.root
     datapath = root + '/' + 'ALL' + '/'
-    use_models = config.loader.checkModels
+    use_models = config.GCM_loader.checkModels
     
     # data1: 腹膜转移分类; data2: 淋巴结同时序（手术）; data3: 淋巴结异时序（化疗后）
     data1, data2, data3 = read_csv_for_PM(config)
-    if config.loader.task == 'PM':
+    if config.GCM_loader.task == 'PM':
         use_data_dict = data1
-    elif config.loader.task == 'NL_SS':
+    elif config.GCM_loader.task == 'NL_SS':
         use_data_dict = data2
     else:
         use_data_dict = data3
 
     use_data_list = list(use_data_dict.keys())
-    remove_list = config.loader.leapfrog
+    remove_list = config.GCM_loader.leapfrog
     use_data = [item for item in use_data_list if item not in remove_list]
     
     data = load_MR_dataset_images(datapath, use_data, use_models, use_data_dict)
     
-    load_transform, train_transform, val_transform = get_transforms(config)
+    load_transform, train_transform, val_transform = get_GCM_transforms(config)
     
-    if config.loader.fix_example == True:
+    if config.GCM_loader.fix_example == True:
         train_data, val_data, test_data = split_examples_to_data(data, config)
     else:
         # shuffle data for objective verification
         random.shuffle(data)
         print('Random Loading!')
 
-        train_data, val_data, test_data = split_list(data, [config.loader.train_ratio, config.loader.val_ratio, config.loader.test_ratio]) 
+        train_data, val_data, test_data = split_list(data, [config.GCM_loader.train_ratio, config.GCM_loader.val_ratio, config.GCM_loader.test_ratio]) 
 
         # if not need test, can use fusion to fuse two data
-        if config.loader.fusion == True:
+        if config.GCM_loader.fusion == True:
             need_val_data = val_data + test_data
             val_data = need_val_data
             test_data = need_val_data
@@ -336,27 +398,47 @@ def get_dataloader(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, torch
     val_example = check_example(val_data)
     test_example = check_example(test_data)
 
-    train_dataset = MultiModalityDataset(data=train_data, over_label=config.loader.over_label, over_add = config.loader.over_add, 
+    train_dataset = MultiModalityDataset(data=train_data, over_label=config.GCM_loader.over_label, over_add = config.GCM_loader.over_add, 
                                          loadforms = load_transform,
                                          transforms=train_transform)
-    val_dataset   = MultiModalityDataset(data=val_data, over_label=config.loader.over_label, over_add = config.loader.over_add,
+    val_dataset   = MultiModalityDataset(data=val_data, over_label=config.GCM_loader.over_label, over_add = config.GCM_loader.over_add,
                                          loadforms = load_transform,
                                          transforms=val_transform)
-    test_dataset   = MultiModalityDataset(data=test_data, over_label=config.loader.over_label, over_add = config.loader.over_add,
+    test_dataset   = MultiModalityDataset(data=test_data, over_label=config.GCM_loader.over_label, over_add = config.GCM_loader.over_add,
                                          loadforms = load_transform,
                                          transforms=val_transform)
     
-    train_loader = monai.data.DataLoader(train_dataset, num_workers=config.loader.num_workers,
+    train_loader = monai.data.DataLoader(train_dataset, num_workers=config.GCM_loader.num_workers,
                                          batch_size=config.trainer.batch_size, shuffle=True)
-    val_loader = monai.data.DataLoader(val_dataset, num_workers=config.loader.num_workers, 
+    val_loader = monai.data.DataLoader(val_dataset, num_workers=config.GCM_loader.num_workers, 
                                        batch_size=config.trainer.batch_size, shuffle=False)
-    test_loader = monai.data.DataLoader(test_dataset, num_workers=config.loader.num_workers, 
+    test_loader = monai.data.DataLoader(test_dataset, num_workers=config.GCM_loader.num_workers, 
                                        batch_size=config.trainer.batch_size, shuffle=False)
     
     return train_loader, val_loader, test_loader, (train_example, val_example, test_example)
 
-def check_loader(config):
-    train_loader, val_loader, test_loader, _ = get_dataloader(config)
+def get_dataloader_BraTS(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
+    train_images = load_brats2021_dataset_images(config.BraTS_loader.dataPath)
+    train_transform, val_transform = get_Brats_transforms(config)
+    train_dataset = monai.data.Dataset(data=train_images[:int(len(train_images) * config.BraTS_loader.train_ratio)],
+                                       transform=train_transform, )
+    val_dataset = monai.data.Dataset(data=train_images[int(len(train_images) * config.BraTS_loader.train_ratio):],
+                                     transform=val_transform, )
+
+    train_loader = monai.data.DataLoader(train_dataset, num_workers=config.BraTS_loader.num_workers,
+                                         batch_size=config.trainer.batch_size, shuffle=True)
+
+    val_loader = monai.data.DataLoader(val_dataset, num_workers=config.BraTS_loader.num_workers, batch_size=config.trainer.batch_size,
+                                       shuffle=False)
+
+    return train_loader, val_loader
+
+
+
+if __name__ == '__main__':
+    config = EasyDict(yaml.load(open('/workspace/Jeming/ZtomorTrain/config.yml', 'r', encoding="utf-8"), Loader=yaml.FullLoader))
+    
+    train_loader, val_loader, test_loader, _ = get_dataloader_GCM(config)
     
     for i, batch in enumerate(train_loader):
         try:
@@ -387,16 +469,3 @@ def check_loader(config):
         except Exception as e:
             print(f"Error occurred while loading batch {i}: {e}")
             continue
-
-
-if __name__ == '__main__':
-    config = EasyDict(yaml.load(open('/workspace/Jeming/Project1/config.yml', 'r', encoding="utf-8"), Loader=yaml.FullLoader))
-    
-    config.loader.task = 'PM'
-    check_loader(config)
-
-    config.loader.task = 'NL_SS'
-    check_loader(config)
-
-    config.loader.task = 'NL_DS'
-    check_loader(config)

@@ -16,7 +16,7 @@ from objprint import objstr
 from timm.optim import optim_factory
 
 from src import utils
-from src.class_loader import get_dataloader
+from src.loader import get_dataloader_GCM as get_dataloader
 from src.optimizer import LinearWarmupCosineAnnealingLR
 from src.utils import Logger, write_example, resume_train_state, split_metrics
 from src.eval import calculate_f1_score, specificity, quadratic_weighted_kappa, top_k_accuracy, calculate_metrics, accumulate_metrics, compute_final_metrics
@@ -25,7 +25,6 @@ from src.model.HWAUNETR_class import HWAUNETR
 from src.model.FMUNETR_class_seg import FMUNETR
 from src.model.SwinUNETR import MultiTaskSwinUNETR
 from monai.networks.nets import SwinUNETR
-from visualization import visualize_for_all
 
 def train_one_epoch(model: torch.nn.Module, loss_functions: Dict[str, torch.nn.modules.loss._Loss],
           train_loader: torch.utils.data.DataLoader,
@@ -215,7 +214,7 @@ if __name__ == '__main__':
     if accelerator.is_main_process == True:
         write_example(example, logging_dir)
     
-    inference = monai.inferers.SlidingWindowInferer(roi_size=config.loader.target_size, overlap=0.5,
+    inference = monai.inferers.SlidingWindowInferer(roi_size=config.GCM_loader.target_size, overlap=0.5,
                                                     sw_device=accelerator.device, device=accelerator.device)
     
     loss_functions = {

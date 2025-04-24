@@ -18,7 +18,8 @@ from objprint import objstr
 from timm.optim import optim_factory
 
 from src import utils
-from src.class_loader import get_dataloader, get_transforms
+from src.loader import get_dataloader_GCM as get_dataloader
+from src.loader import get_transforms
 from src.optimizer import LinearWarmupCosineAnnealingLR
 from src.utils import Logger, write_example, resume_train_state, split_metrics, load_model_dict
 from src.eval import calculate_f1_score, specificity, quadratic_weighted_kappa, top_k_accuracy, calculate_metrics, accumulate_metrics, compute_final_metrics
@@ -26,7 +27,6 @@ from src.eval import calculate_f1_score, specificity, quadratic_weighted_kappa, 
 from src.model.HWAUNETR_class import HWAUNETR
 from src.model.SwinUNETR import MultiTaskSwinUNETR
 from monai.networks.nets import SwinUNETR
-from visualization import visualize_for_all
 
 
 
@@ -101,14 +101,14 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
         lable_score = {}
         load_transform, _, _ = get_transforms(config)
         for e in example:
-            choose_image = config.loader.root + '/' + 'ALL' + '/' + f'{e}'
+            choose_image = config.GCM_loader.root + '/' + 'ALL' + '/' + f'{e}'
             accelerator.print('valing for image: ', choose_image)
 
             images = []
             labels = []
-            for i in range(len(config.loader.checkModels)):
-                image_path = choose_image + '/' + config.loader.checkModels[i] + '/' + f'{e}.nii.gz'
-                label_path = choose_image + '/' + config.loader.checkModels[i] + '/' + f'{e}seg.nii.gz'
+            for i in range(len(config.GCM_loader.checkModels)):
+                image_path = choose_image + '/' + config.GCM_loader.checkModels[i] + '/' + f'{e}.nii.gz'
+                label_path = choose_image + '/' + config.GCM_loader.checkModels[i] + '/' + f'{e}seg.nii.gz'
 
                 batch = load_transform[i]({
                     'image': image_path,
@@ -200,7 +200,7 @@ if __name__ == '__main__':
     
 
     accelerator.print('load model...')
-    model = HWAUNETR(in_chans=len(config.loader.checkModels), fussion = [1,2,4,8], kernel_sizes=[4, 2, 2, 2], depths=[1, 1, 1, 1], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8],
+    model = HWAUNETR(in_chans=len(config.GCM_loader.checkModels), fussion = [1,2,4,8], kernel_sizes=[4, 2, 2, 2], depths=[1, 1, 1, 1], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8],
                 out_indices=[0, 1, 2, 3])
     model = load_model(model, accelerator, config.finetune.checkpoint)
 
