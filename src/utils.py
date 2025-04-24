@@ -403,7 +403,6 @@ def split_metrics(channels, metrics_template):
 
 
 def write_example(example, log_dir):
-
     with open(log_dir + '/' + "train_example.txt", "w") as file:
         # 遍历列表中的每个字符串
         for item in example[0]:
@@ -421,3 +420,22 @@ def write_example(example, log_dir):
         for item in example[2]:
             # 将每个元素写入文件，每个字符串占一行
             file.write(item + "\n")
+
+    if len(example) == 6:
+        with open(log_dir + '/' + "train_lack_example.txt", "w") as file:
+            # 遍历列表中的每个字符串
+            for item in example[3]:
+                # 将每个元素写入文件，每个字符串占一行
+                file.write(item + "\n")
+        
+        with open(log_dir + '/' + "val_lack_example.txt", "w") as file:
+            # 遍历列表中的每个字符串
+            for item in example[4]:
+                # 将每个元素写入文件，每个字符串占一行
+                file.write(item + "\n")
+        
+        with open(log_dir + '/' + "test_lack_example.txt", "w") as file:
+            # 遍历列表中的每个字符串
+            for item in example[5]:
+                # 将每个元素写入文件，每个字符串占一行
+                file.write(item + "\n")
