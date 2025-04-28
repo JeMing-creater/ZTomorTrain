@@ -12,6 +12,7 @@ from timm.models.layers import trunc_normal_
 from torch import nn
 from pathlib import Path
 import numpy as np
+import shutil
 import nibabel as nib
 
 class MetricSaver(nn.Module):
@@ -439,3 +440,17 @@ def write_example(example, log_dir):
             for item in example[5]:
                 # 将每个元素写入文件，每个字符串占一行
                 file.write(item + "\n")
+
+
+def copy_file(src_file: str, dst_dir: str) -> None:
+    """Copy a single file from src_file to dst_dir."""
+    if not os.path.isfile(src_file):
+        raise FileNotFoundError(f"Source file not found: {src_file}")
+
+    if not os.path.exists(dst_dir):
+        os.makedirs(dst_dir)
+
+    file_name = os.path.basename(src_file)
+    dst_file = os.path.join(dst_dir, file_name)
+    shutil.copy2(src_file, dst_file)
+    print(f"Copied {src_file} to {dst_file}")
