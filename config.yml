@@ -1,5 +1,5 @@
 trainer:
-  num_epochs: 300
+  num_epochs: 100
   val_epochs: 10
   warmup: 2
   batch_size: 2
@@ -12,8 +12,8 @@ trainer:
 
 finetune:
   # checkpoint: TFMUNETR_multimodals_ADC_T2
-  # checkpoint: TFMUNETR_multimodals_ADC_T2
-  checkpoint: TFMUNETR_multimodals_GCNC
+  checkpoint: TFMUNETR_multimodals_ADC_T2FS
+  # checkpoint: TFMUNETR_multimodals_GCNC
 
 GCM_loader:
   train_ratio: 0.7
@@ -35,7 +35,7 @@ GCM_loader:
   leapfrog: []
   root: /root/.cache/huggingface/forget/datasets/MeiMRNew/
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ['ADC', 'T2_FS']
+  checkModels: ["ADC", "T2_FS"]
   model_scale: [[0, 6000], [0, 4500], [0, 4500]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
 
@@ -53,7 +53,7 @@ GCNC_loader:
   leapfrog: []
   root: /root/.cache/huggingface/forget/datasets/GZNC/
   # checkModels: ["T1WI","T1WI+C","T2WI"]
-  checkModels: ["T1WI","T1WI+C","T2WI"]
+  checkModels: ["T1WI", "T1WI+C", "T2WI"]
   model_scale: [[0, 6000], [0, 6000], [0, 6000]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
 
@@ -67,7 +67,7 @@ valer:
   dl_score_csv_path: score
 
 visualization:
-  image_path: img
-  for_single: False
-  choose_dir: NonsurgicalMR
-  choose_image: "0000095438"
+  heatmap:
+    choose_image: "0002693285"
+    target_layers: hidden_downsample
+    write_path: output_slices

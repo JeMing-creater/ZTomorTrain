@@ -5,6 +5,7 @@ score
 SegMamba
 __pycache__
 model_store
+output_slices
 src/__pycache__
 src/model/__pycache__
 requirements/Mamba/causal-conv1d/build

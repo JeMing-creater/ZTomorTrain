@@ -8,6 +8,7 @@ from typing import Dict
 import monai
 import torch
 import yaml
+import pandas as pd
 import numpy as np
 import torch.nn as nn
 from dataclasses import dataclass, field
@@ -19,7 +20,7 @@ from timm.optim import optim_factory
 
 from src import utils
 from src.loader import get_dataloader_GCM as get_dataloader
-from src.loader import get_transforms
+from src.loader import get_GCM_transforms as get_transforms
 from src.optimizer import LinearWarmupCosineAnnealingLR
 from src.utils import Logger, write_example, resume_train_state, split_metrics, load_model_dict
 from src.eval import calculate_f1_score, specificity, quadratic_weighted_kappa, top_k_accuracy, calculate_metrics, accumulate_metrics, compute_final_metrics
@@ -170,7 +171,18 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
             
             # 遍历字典并写入键值对
             for key, value in dl_score.items():
-                writer.writerow([str(key)+'\t', value, lable_score[key]])
+                writer.writerow([str(key), value, lable_score[key]])
+
+    def change_to_xlxs(csv_file, save_path):
+        df = pd.read_csv(csv_file, dtype={0: str})
+
+        # 清理病人编号列中的前后空格
+        df.iloc[:, 0] = df.iloc[:, 0].str.strip()
+
+        # 将数据保存为 Excel 文件
+        df.to_excel(save_path, index=False, engine='openpyxl')
+
+        os.remove(csv_file)
 
     train_example, val_example, test_example = examples
     tr_dl_score,  tr_label  = compute_for_sinlge_example(post_trans, train_example)
@@ -185,6 +197,10 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
     write_to_csv(val_dl_score, val_label, os.path.join(config.valer.dl_score_csv_path, 'val_dl_score.csv'))   
     write_to_csv(te_dl_score,  te_label, os.path.join(config.valer.dl_score_csv_path, 'test_dl_score.csv'))
 
+    change_to_xlxs(os.path.join(config.valer.dl_score_csv_path, 'train_dl_score.csv'), os.path.join(config.valer.dl_score_csv_path, 'train_dl_score.xlsx'))
+    change_to_xlxs(os.path.join(config.valer.dl_score_csv_path, 'val_dl_score.csv'), os.path.join(config.valer.dl_score_csv_path, 'val_dl_score.xlsx'))
+    change_to_xlxs(os.path.join(config.valer.dl_score_csv_path, 'test_dl_score.csv'), os.path.join(config.valer.dl_score_csv_path, 'test_dl_score.xlsx'))
+
     return tr_dl_score, val_dl_score, te_dl_score
     
 
@@ -198,7 +214,6 @@ if __name__ == '__main__':
     accelerator.init_trackers(os.path.split(__file__)[-1].split(".")[0])
     accelerator.print(objstr(config))
     
-
     accelerator.print('load model...')
     model = HWAUNETR(in_chans=len(config.GCM_loader.checkModels), fussion = [1,2,4,8], kernel_sizes=[4, 2, 2, 2], depths=[1, 1, 1, 1], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8],
                 out_indices=[0, 1, 2, 3])
@@ -229,6 +244,6 @@ if __name__ == '__main__':
 
     # start valing
     accelerator.print("Start Valing! ")
-    # val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
+    val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
     compute_dl_score_for_example(model, config, post_trans, example)
 
