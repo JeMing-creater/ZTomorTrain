@@ -134,6 +134,7 @@ def write_heatmap(config, model, accelerator):
         
         coronal_MRI_img = np.squeeze(MRI_array[:, coronal_slice_count, :])
         coronal_grad_cmap_img = np.squeeze(heatmap[:, coronal_slice_count, :])
+        
         # Sagittal view
         img_plot = axarr[0, 0].imshow(np.rot90(sagittal_MRI_img, 1), cmap='gray')
         axarr[0, 0].axis('off')

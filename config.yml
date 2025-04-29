@@ -1,5 +1,5 @@
 trainer:
-  num_epochs: 100
+  num_epochs: 300
   val_epochs: 10
   warmup: 2
   batch_size: 2
@@ -11,9 +11,14 @@ trainer:
   weight_decay_end: 0.04
 
 finetune:
-  # checkpoint: TFMUNETR_multimodals_ADC_T2
-  checkpoint: TFMUNETR_multimodals_ADC_T2FS
-  # checkpoint: TFMUNETR_multimodals_GCNC
+  GCM:
+    # checkpoint: TFMUNETR_multimodals_ADC_T2
+    checkpoint: TFMUNETR_multimodals_ADC_T2FS
+    # checkpoint: TFMUNETR_multimodals_GCNC
+  GCNC:
+    checkpoint: TFMUNETR_multimodals_T1WI_T1WI_C
+  BraTS:
+    checkpoint: TFMUNETR_multimodals
 
 GCM_loader:
   train_ratio: 0.7
@@ -48,6 +53,8 @@ GCNC_loader:
   num_workers: 0
   # use this flag can fix experiment examples, must set train_example.txt, val_example.txt and test_example.txt to root.
   fix_example: False
+  over_label: False
+  over_add: 10
   # leapfrog: some data error can write in this list to remove from dataloader
   # leapfrog: ['0001902261', '0000439538','0002235469','0001308202']
   leapfrog: []
