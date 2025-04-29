@@ -97,27 +97,26 @@ def read_csv_for_PM(config):
 
 def read_csv_for_GCNC(config):
     
-    csv_path1 = config.GCNC_loader.root + '/' + 'First.xlsx'
-    csv_path2 = config.GCNC_loader.root + '/' + 'Second.xlsx'
+    csv_path1 = config.GCNC_loader.root + '/' + 'ALL.xlsx'
 
     # 定义dtype转换，将第四列（索引为3）读作str
-    dtype_converters = {1: str}
+    dtype_converters = {3: str}
     
-    df1 = pd.read_excel(csv_path1, engine='openpyxl', dtype=dtype_converters)
-    df2 = pd.read_excel(csv_path2, engine='openpyxl', dtype=dtype_converters)
-
+    df = pd.read_excel(csv_path1, engine='openpyxl', dtype=dtype_converters)
+    
     # 创建空列表
-    # TODO：由于目前两个xlx文件用于分类的标签不一致，不知道哪个是分类标签，目前只能先以分割标签为准。如果后期纳入分类，需要在读xlx文件时读取分类标签，用字典存储
-    content_dict = []
+    content_dict = {}
     # 遍历DataFrame的每一行，从第二行开始
-    for index, row in df1.iterrows():
+    for index, row in df.iterrows():
         key = row['病理号']
-        content_dict.append(str(key))
-    for index, row in df2.iterrows():
-        key = row['病理号']
-        if key in content_dict:
+        # TODO: 此处只做高低表达分类记录。后续数据补全可以添加阴阳性分类
+        # 如果指标缺失，则跳过读取
+        if isinstance(row['PD-L1'], (int, float))!= True:
             continue
-        content_dict.append(str(key))
+        if row['PD-L1'] > 20:
+            content_dict[key] = 1
+        else:
+            content_dict[key] = 0
     return content_dict
 
 def read_usedata(file_path):
@@ -377,6 +376,7 @@ class MultiModalityDataset(monai.data.Dataset):
         combined_data = {}
         
         for i in range(0, len(item['image'])):
+            # print('Loading ', item['image'][i])
             globals()[f'data_{i}'] = self.loadforms[i]({
                 'image': item['image'][i],
                 'label': item['label'][i]
@@ -534,7 +534,12 @@ def get_dataloader_GCNC(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, 
     use_models = config.GCNC_loader.checkModels
     
     content_dict = read_csv_for_GCNC(config)
-    data, data_lack = load_MR_dataset_images(datapath, content_dict, use_models)
+    
+    use_data_list = list(content_dict.keys())
+    remove_list = config.GCNC_loader.leapfrog
+    use_data = [item for item in use_data_list if item not in remove_list]
+    
+    data, data_lack = load_MR_dataset_images(datapath, use_data, use_models, content_dict)
     load_transform, train_transform, val_transform = get_GCNC_transforms(config)
 
     if config.GCNC_loader.fix_example == True:
@@ -558,42 +563,42 @@ def get_dataloader_GCNC(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, 
     val_example = check_example(val_data)
     test_example = check_example(test_data)
 
-    train_lack_example = check_example(train_data_lack)
-    val_lack_example = check_example(val_data_lack)
-    test_lack_example = check_example(test_data_lack)
+    # train_lack_example = check_example(train_data_lack)
+    # val_lack_example = check_example(val_data_lack)
+    # test_lack_example = check_example(test_data_lack)
 
-    train_dataset = MultiModalityDataset(data=train_data, over_label=config.GCM_loader.over_label, over_add = config.GCM_loader.over_add,loadforms = load_transform,
-                                         transforms=train_transform, use_class=False)
-    val_dataset   = MultiModalityDataset(data=val_data, over_label=config.GCM_loader.over_label, over_add = config.GCM_loader.over_add,loadforms = load_transform,
-                                         transforms=val_transform, use_class=False)
-    test_dataset   = MultiModalityDataset(data=test_data, over_label=config.GCM_loader.over_label, over_add = config.GCM_loader.over_add,loadforms = load_transform,transforms=val_transform, use_class=False)
+    train_dataset = MultiModalityDataset(data=train_data, over_label=config.GCNC_loader.over_label, over_add = config.GCNC_loader.over_add,loadforms = load_transform,
+                                         transforms=train_transform, use_class=True)
+    val_dataset   = MultiModalityDataset(data=val_data, over_label=config.GCNC_loader.over_label, over_add = config.GCNC_loader.over_add,loadforms = load_transform,
+                                         transforms=val_transform, use_class=True)
+    test_dataset   = MultiModalityDataset(data=test_data, over_label=config.GCNC_loader.over_label, over_add = config.GCNC_loader.over_add,loadforms = load_transform,transforms=val_transform, use_class=True)
     
     
-    train_lack_dataset = MultiModalityDataset(data=train_data_lack, over_label=config.GCM_loader.over_label, over_add = config.GCM_loader.over_add,loadforms = load_transform,
-                                         transforms=train_transform)
-    val_lack_dataset   = MultiModalityDataset(data=val_data_lack, over_label=config.GCM_loader.over_label, over_add = config.GCM_loader.over_add,
-                                         loadforms = load_transform,
-                                         transforms=val_transform)
-    test_lack_dataset   = MultiModalityDataset(data=test_data_lack, over_label=config.GCM_loader.over_label, over_add = config.GCM_loader.over_add,
-                                         loadforms = load_transform,
-                                         transforms=val_transform)
+    # train_lack_dataset = MultiModalityDataset(data=train_data_lack, over_label=config.GCNC_loader.over_label, over_add = config.GCNC_loader.over_add,loadforms = load_transform,
+    #                                      transforms=train_transform)
+    # val_lack_dataset   = MultiModalityDataset(data=val_data_lack, over_label=config.GCNC_loader.over_label, over_add = config.GCNC_loader.over_add,
+    #                                      loadforms = load_transform,
+    #                                      transforms=val_transform)
+    # test_lack_dataset   = MultiModalityDataset(data=test_data_lack, over_label=config.GCNC_loader.over_label, over_add = config.GCNC_loader.over_add,
+    #                                      loadforms = load_transform,
+    #                                      transforms=val_transform)
 
     
-    train_loader = monai.data.DataLoader(train_dataset, num_workers=config.GCM_loader.num_workers,
+    train_loader = monai.data.DataLoader(train_dataset, num_workers=config.GCNC_loader.num_workers,
                                          batch_size=config.trainer.batch_size, shuffle=True)
-    val_loader = monai.data.DataLoader(val_dataset, num_workers=config.GCM_loader.num_workers, 
+    val_loader = monai.data.DataLoader(val_dataset, num_workers=config.GCNC_loader.num_workers, 
                                        batch_size=config.trainer.batch_size, shuffle=False)
-    test_loader = monai.data.DataLoader(test_dataset, num_workers=config.GCM_loader.num_workers, 
+    test_loader = monai.data.DataLoader(test_dataset, num_workers=config.GCNC_loader.num_workers, 
                                        batch_size=config.trainer.batch_size, shuffle=False)
     
-    train_lack_loader = monai.data.DataLoader(train_lack_dataset, num_workers=config.GCM_loader.num_workers,
-                                         batch_size=config.trainer.batch_size, shuffle=True)
-    val_lack_loader = monai.data.DataLoader(val_lack_dataset, num_workers=config.GCM_loader.num_workers, 
-                                       batch_size=config.trainer.batch_size, shuffle=False)
-    test_lack_loader = monai.data.DataLoader(test_lack_dataset, num_workers=config.GCM_loader.num_workers, 
-                                       batch_size=config.trainer.batch_size, shuffle=False)
+    # train_lack_loader = monai.data.DataLoader(train_lack_dataset, num_workers=config.GCNC_loader.num_workers,
+    #                                      batch_size=config.trainer.batch_size, shuffle=True)
+    # val_lack_loader = monai.data.DataLoader(val_lack_dataset, num_workers=config.GCNC_loader.num_workers, 
+    #                                    batch_size=config.trainer.batch_size, shuffle=False)
+    # test_lack_loader = monai.data.DataLoader(test_lack_dataset, num_workers=config.GCNC_loader.num_workers, 
+    #                                    batch_size=config.trainer.batch_size, shuffle=False)
     
-    return train_loader, val_loader, test_loader,train_lack_loader,val_lack_loader,test_lack_loader, (train_example, val_example, test_example, train_lack_example, val_lack_example, test_lack_example)
+    return train_loader, val_loader, test_loader, (train_example, val_example, test_example)
 
 def get_dataloader_BraTS(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     train_images = load_brats2021_dataset_images(config.BraTS_loader.dataPath)
@@ -612,12 +617,11 @@ def get_dataloader_BraTS(config: EasyDict) -> Tuple[torch.utils.data.DataLoader,
     return train_loader, val_loader
 
 
-
 if __name__ == '__main__':
     config = EasyDict(yaml.load(open('/workspace/Jeming/ZtomorTrain/config.yml', 'r', encoding="utf-8"), Loader=yaml.FullLoader))
     
     # train_loader, val_loader, test_loader, _ = get_dataloader_GCM(config)
-    train_loader, val_loader, test_loader, train_lack_loader, val_lack_loader, test_lack_loader, _ = get_dataloader_GCNC(config)
+    train_loader, val_loader, test_loader, _ = get_dataloader_GCNC(config)
     
     for i, batch in enumerate(train_loader):
         try:

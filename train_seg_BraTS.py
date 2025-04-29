@@ -191,7 +191,7 @@ if __name__ == '__main__':
                                               max_epochs=config.trainer.num_epochs)
 
     # # 加载预训练模型
-    model = load_pretrain_model(f"{os.getcwd()}/model_store/{config.finetune.checkpoint}/best/new/pytorch_model.bin",
+    model = load_pretrain_model(f"{os.getcwd()}/model_store/{config.finetune.BraTS.checkpoint}/best/new/pytorch_model.bin",
                                 model,
                                 accelerator)
 
@@ -207,7 +207,7 @@ if __name__ == '__main__':
     best_hd95_acc = torch.tensor(0)
     best_hd95_class = []
     if config.trainer.resume:
-        model, optimizer, scheduler, start_num_epochs, step, val_step, best_score, best_metrics = resume_train_state(model, config.finetune.checkpoint, optimizer, scheduler, accelerator)
+        model, optimizer, scheduler, start_num_epochs, step, val_step, best_score, best_metrics = resume_train_state(model, config.finetune.BraTS.checkpoint, optimizer, scheduler, accelerator)
         
     
     model, optimizer, scheduler, train_loader, val_loader = accelerator.prepare(model, optimizer, scheduler,
@@ -229,8 +229,8 @@ if __name__ == '__main__':
                 best_class = dice_class
                 best_hd95_acc = hd95_acc
                 best_hd95_class = hd95_class
-                accelerator.save_state(output_dir=f"{os.getcwd()}/model_store/{config.finetune.checkpoint}/best/new/")
-                torch.save(model.state_dict(), f"{os.getcwd()}/model_store/{config.finetune.checkpoint}/best/new/model.pth")
+                accelerator.save_state(output_dir=f"{os.getcwd()}/model_store/{config.finetune.BraTS.checkpoint}/best/new/")
+                torch.save(model.state_dict(), f"{os.getcwd()}/model_store/{config.finetune.BraTS.checkpoint}/best/new/model.pth")
             print(f'Epoch [{epoch + 1}/{config.trainer.num_epochs}] dice acc: {dice_acc} best acc: {best_acc}')
             print(f'Epoch [{epoch + 1}/{config.trainer.num_epochs}] best acc: {best_acc}, best_class: {best_class}')
             if best_hd95_acc != 0:
@@ -241,9 +241,9 @@ if __name__ == '__main__':
                 print(f'Epoch [{epoch + 1}/{config.trainer.num_epochs}] best best_hd95_acc: {best_hd95_acc}, best_hd95_class: {hd95_class}')
         
         accelerator.print('Checkout....')
-        accelerator.save_state(output_dir=f"{os.getcwd()}/model_store/{config.finetune.checkpoint}/checkpoint")
+        accelerator.save_state(output_dir=f"{os.getcwd()}/model_store/{config.finetune.BraTS.checkpoint}/checkpoint")
         torch.save({'epoch': epoch, 'best_acc': best_acc, 'best_class': best_class},
-                    f'{os.getcwd()}/model_store/{config.finetune.checkpoint}/checkpoint/epoch.pth.tar')
+                    f'{os.getcwd()}/model_store/{config.finetune.BraTS.checkpoint}/checkpoint/epoch.pth.tar')
         accelerator.print('Checkout Over!')
         
     # accelerator.print(f"最高acc: {metric_saver.best_acc}")

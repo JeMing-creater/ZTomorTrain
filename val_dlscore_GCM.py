@@ -208,7 +208,7 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
 if __name__ == '__main__':
     config = EasyDict(yaml.load(open('config.yml', 'r', encoding="utf-8"), Loader=yaml.FullLoader))
     utils.same_seeds(50)
-    logging_dir = os.getcwd() + '/logs/' + config.finetune.checkpoint + str(datetime.now()).replace(' ','_').replace('-','_').replace(':','_').replace('.','_')
+    logging_dir = os.getcwd() + '/logs/' + config.finetune.GCM.checkpoint + str(datetime.now()).replace(' ','_').replace('-','_').replace(':','_').replace('.','_')
     accelerator = Accelerator(cpu=False, log_with=["tensorboard"], logging_dir=logging_dir)
     Logger(logging_dir if accelerator.is_local_main_process else None)
     accelerator.init_trackers(os.path.split(__file__)[-1].split(".")[0])
@@ -217,7 +217,7 @@ if __name__ == '__main__':
     accelerator.print('load model...')
     model = HWAUNETR(in_chans=len(config.GCM_loader.checkModels), fussion = [1,2,4,8], kernel_sizes=[4, 2, 2, 2], depths=[1, 1, 1, 1], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8],
                 out_indices=[0, 1, 2, 3])
-    model = load_model(model, accelerator, config.finetune.checkpoint)
+    model = load_model(model, accelerator, config.finetune.GCM.checkpoint)
 
 
     accelerator.print('load dataset...')

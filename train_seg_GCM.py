@@ -126,7 +126,7 @@ def val_one_epoch(model: torch.nn.Module,
 if __name__ == '__main__':
     config = EasyDict(yaml.load(open('config.yml', 'r', encoding="utf-8"), Loader=yaml.FullLoader))
     utils.same_seeds(50)
-    logging_dir = os.getcwd() + '/logs/' + config.finetune.checkpoint + str(datetime.now()).replace(' ','_').replace('-','_').replace(':','_').replace('.','_')
+    logging_dir = os.getcwd() + '/logs/' + config.finetune.GCM.checkpoint + str(datetime.now()).replace(' ','_').replace('-','_').replace(':','_').replace('.','_')
     accelerator = Accelerator(cpu=False, log_with=["tensorboard"], logging_dir=logging_dir)
     Logger(logging_dir if accelerator.is_local_main_process else None)
     accelerator.init_trackers(os.path.split(__file__)[-1].split(".")[0])
@@ -187,7 +187,7 @@ if __name__ == '__main__':
     
     if config.trainer.resume:
         model, optimizer, scheduler, starting_epoch, train_step, best_score, best_metrics, best_hd95, best_hd95_metrics = utils.resume_train_state(model, '{}'.format(
-            config.finetune.checkpoint), optimizer, scheduler, train_loader, accelerator)
+            config.finetune.GCM.checkpoint), optimizer, scheduler, train_loader, accelerator)
         val_step = train_step
     
     model, optimizer, scheduler, train_loader, val_loader, test_loader = accelerator.prepare(model, optimizer, scheduler, train_loader, val_loader, test_loader)
@@ -205,7 +205,7 @@ if __name__ == '__main__':
         accelerator.print(f'Epoch [{epoch+1}/{config.trainer.num_epochs}] dice acc: {dice_acc} hd95_acc: {hd95_acc} best acc: {best_score}, best hd95: {best_hd95}, best test acc: {best_test_score}, best test hd95: {best_test_hd95}')
         # 保存模型
         if dice_acc > best_score:
-            accelerator.save_state(output_dir=f"{os.getcwd()}/model_store/{config.finetune.checkpoint}/best")
+            accelerator.save_state(output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCM.checkpoint}/best")
             best_score = dice_acc
             best_metrics = dice_class
             best_hd95 = hd95_acc
@@ -216,9 +216,9 @@ if __name__ == '__main__':
                                                                    post_trans, accelerator,test=True)
             
         accelerator.print('Cheakpoint...')
-        accelerator.save_state(output_dir=f"{os.getcwd()}/model_store/{config.finetune.checkpoint}/checkpoint")
+        accelerator.save_state(output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCM.checkpoint}/checkpoint")
         torch.save({'epoch': epoch, 'best_score': best_score, 'best_metrics': best_metrics, 'best_hd95': best_hd95, 'best_hd95_metrics': best_hd95_metrics},
-                    f'{os.getcwd()}/model_store/{config.finetune.checkpoint}/checkpoint/epoch.pth.tar')
+                    f'{os.getcwd()}/model_store/{config.finetune.GCM.checkpoint}/checkpoint/epoch.pth.tar')
         
     accelerator.print(f"dice score: {best_test_score}")
     accelerator.print(f"dice metrics : {best_test_metrics}")
