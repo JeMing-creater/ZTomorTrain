@@ -34,6 +34,7 @@ def train_one_epoch(model: torch.nn.Module, loss_functions: Dict[str, torch.nn.m
           post_trans: monai.transforms.Compose, accelerator: Accelerator, epoch: int, step: int):
     # 训练
     model.train()
+    accelerator.print(f'Training...', flush=True)
     loop = tqdm(enumerate(train_loader), total =len(train_loader))
     # for i, image_batch in enumerate(train_loader):
     for i, image_batch in loop:
@@ -131,8 +132,10 @@ def val_one_epoch(model: torch.nn.Module,
     model.eval()
     if test:
         flag = 'Test'
+        accelerator.print(f'Testing...', flush=True)
     else:
         flag = 'Val'
+        accelerator.print(f'Valing...', flush=True)
     loop = tqdm(enumerate(val_loader), total =len(val_loader))
     # for i, image_batch in enumerate(val_loader):
     for i, image_batch in loop:
