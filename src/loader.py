@@ -92,7 +92,7 @@ def read_csv_for_PM(config):
         values = row[2]  # 第3列的数据读为label
         
         content_dict3[key] = values
-
+    
     return content_dict1, content_dict2, content_dict3
 
 def read_csv_for_GCNC(config):
@@ -618,10 +618,10 @@ def get_dataloader_BraTS(config: EasyDict) -> Tuple[torch.utils.data.DataLoader,
 
 
 if __name__ == '__main__':
-    config = EasyDict(yaml.load(open('/workspace/Jeming/ZtomorTrain/config.yml', 'r', encoding="utf-8"), Loader=yaml.FullLoader))
+    config = EasyDict(yaml.load(open('/workspace/Jeming/ZTomorTrain/config.yml', 'r', encoding="utf-8"), Loader=yaml.FullLoader))
     
-    # train_loader, val_loader, test_loader, _ = get_dataloader_GCM(config)
-    train_loader, val_loader, test_loader, _ = get_dataloader_GCNC(config)
+    train_loader, val_loader, test_loader, _ = get_dataloader_GCM(config)
+    # train_loader, val_loader, test_loader, _ = get_dataloader_GCNC(config)
     
     for i, batch in enumerate(train_loader):
         try:

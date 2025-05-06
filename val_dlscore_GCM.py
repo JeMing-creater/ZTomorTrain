@@ -21,6 +21,7 @@ from timm.optim import optim_factory
 from src import utils
 from src.loader import get_dataloader_GCM as get_dataloader
 from src.loader import get_GCM_transforms as get_transforms
+from src.loader import read_csv_for_PM
 from src.optimizer import LinearWarmupCosineAnnealingLR
 from src.utils import Logger, write_example, resume_train_state, split_metrics, load_model_dict
 from src.eval import calculate_f1_score, specificity, quadratic_weighted_kappa, top_k_accuracy, calculate_metrics, accumulate_metrics, compute_final_metrics
@@ -134,6 +135,7 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
             #     dl_s = 0.0001 
             dl_score[e] = dl_s
             lable_score[e] = l
+            # gt_score[e] = 
         return dl_score, lable_score
 
     # 6. 定义一个函数，对 DL-scores 进行正态化
@@ -154,7 +156,7 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
         
         return normalized_scores
 
-    def write_to_csv(dl_score, lable_score, csv_path):
+    def write_to_csv(dl_score, lable_score, csv_path, use_data_dict):
         # 判断路径是否存在
         dir_path = os.path.dirname(csv_path)
         if not os.path.exists(dir_path):
@@ -167,11 +169,11 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
             writer = csv.writer(file)
             
             # 写入表头
-            writer.writerow(['Key', 'Value', 'Label'])
+            writer.writerow(['Key', 'Value', 'Label', 'Ground Truth'])
             
             # 遍历字典并写入键值对
             for key, value in dl_score.items():
-                writer.writerow([str(key), value, lable_score[key]])
+                writer.writerow([str(key), value, lable_score[key], use_data_dict[key]])
 
     def change_to_xlxs(csv_file, save_path):
         df = pd.read_csv(csv_file, dtype={0: str})
@@ -183,6 +185,14 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
         df.to_excel(save_path, index=False, engine='openpyxl')
 
         os.remove(csv_file)
+    data1, data2, data3 = read_csv_for_PM(config)
+
+    if config.GCM_loader.task == 'PM':
+        use_data_dict = data1
+    elif config.GCM_loader.task == 'NL_SS':
+        use_data_dict = data2
+    else:
+        use_data_dict = data3
 
     train_example, val_example, test_example = examples
     tr_dl_score,  tr_label  = compute_for_sinlge_example(post_trans, train_example)
@@ -193,9 +203,9 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
     val_dl_score = normalize_dl_scores(val_dl_score)
     te_dl_score  = normalize_dl_scores(te_dl_score)
 
-    write_to_csv(tr_dl_score,  tr_label, os.path.join(config.valer.dl_score_csv_path, 'train_dl_score.csv'))
-    write_to_csv(val_dl_score, val_label, os.path.join(config.valer.dl_score_csv_path, 'val_dl_score.csv'))   
-    write_to_csv(te_dl_score,  te_label, os.path.join(config.valer.dl_score_csv_path, 'test_dl_score.csv'))
+    write_to_csv(tr_dl_score,  tr_label, os.path.join(config.valer.dl_score_csv_path, 'train_dl_score.csv'), use_data_dict)
+    write_to_csv(val_dl_score, val_label, os.path.join(config.valer.dl_score_csv_path, 'val_dl_score.csv'), use_data_dict)   
+    write_to_csv(te_dl_score,  te_label, os.path.join(config.valer.dl_score_csv_path, 'test_dl_score.csv'), use_data_dict)
 
     change_to_xlxs(os.path.join(config.valer.dl_score_csv_path, 'train_dl_score.csv'), os.path.join(config.valer.dl_score_csv_path, 'train_dl_score.xlsx'))
     change_to_xlxs(os.path.join(config.valer.dl_score_csv_path, 'val_dl_score.csv'), os.path.join(config.valer.dl_score_csv_path, 'val_dl_score.xlsx'))
@@ -244,6 +254,6 @@ if __name__ == '__main__':
 
     # start valing
     accelerator.print("Start Valing! ")
-    val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
+    # val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
     compute_dl_score_for_example(model, config, post_trans, example)
 
