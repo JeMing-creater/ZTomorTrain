@@ -12,8 +12,8 @@ trainer:
 
 finetune:
   GCM:
-    # checkpoint: TFMUNETR_multimodals_ADC_T2
-    checkpoint: TFMUNETR_singlemodals_ADC
+    checkpoint: TFMUNETR_multimodals_ADC_T2
+    # checkpoint: TFMUNETR_singlemodals_ADC
     # checkpoint: TFMUNETR_singlemodals_T2FS
   GCNC:
     # checkpoint: TFMUNETR_multimodals_T1WI_T1WI_C
@@ -43,9 +43,9 @@ GCM_loader:
   leapfrog: []
   root: /root/.cache/huggingface/forget/datasets/MeiMRNew/
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ["ADC"]
+  checkModels: ["ADC", 'T2_FS']
   # model_scale: [[0, 6000], [0, 4500], [0, 4500]] # 对应模态的最小最大像素值，用于归一化
-  model_scale: [[0, 6000]] # 对应模态的最小最大像素值，用于归一化
+  model_scale: [[0, 6000], [0, 4500]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
 
 GCNC_loader:
