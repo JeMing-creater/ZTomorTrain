@@ -524,6 +524,9 @@ def get_dataloader_GCM(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, t
     
     # 在use_data处划分数据，避免并行导致的读取问题
     if config.GCM_loader.fix_example != True:
+        if config.GCM_loader.time_limit != True:
+            random.shuffle(data)
+            print('Random Loading!')
         train_use_data, val_use_data, test_use_data = split_list(use_data, [config.GCM_loader.train_ratio, config.GCM_loader.val_ratio, config.GCM_loader.test_ratio]) 
         if config.GCM_loader.fusion == True:
             need_val_data = val_use_data + test_use_data
