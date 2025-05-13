@@ -2,7 +2,7 @@ trainer:
   num_epochs: 300
   val_epochs: 10
   warmup: 2
-  batch_size: 2
+  batch_size: 4
   resume: True
   lr: 0.001
   min_lr: 0.0000001
@@ -13,8 +13,8 @@ trainer:
 finetune:
   GCM:
     # checkpoint: TFMUNETR_multimodals_ADC_T2
-    checkpoint: TFMUNETR_singlemodals_T2FS
-    # checkpoint: TFMUNETR_multimodals_GCNC
+    checkpoint: TFMUNETR_singlemodals_ADC
+    # checkpoint: TFMUNETR_singlemodals_T2FS
   GCNC:
     # checkpoint: TFMUNETR_multimodals_T1WI_T1WI_C
     checkpoint: TFMUNETR_multimodals_T1WI_T2WI_C_seg
@@ -26,12 +26,14 @@ GCM_loader:
   val_ratio: 0.1
   test_ratio: 0.2
   # fusion: do you need test dataset? if not, can use fusion to fuse val and test data to one dataloader.
-  fusion: False
+  fusion: True
+  # split dataset based on check time or not.
+  time_limit: True
   num_workers: 0
   over_label: False
   over_add: 10
   # use this flag can fix experiment examples, must set train_example.txt, val_example.txt and test_example.txt to root.
-  fix_example: True
+  fix_example: False
   # task: for different task: PM(腹膜转移分类) ; NL_SS(淋巴结同时序（手术）); NL_DS(淋巴结异时序（化疗后）)
   task: PM
   # task: NL_SS
@@ -41,9 +43,9 @@ GCM_loader:
   leapfrog: []
   root: /root/.cache/huggingface/forget/datasets/MeiMRNew/
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ["T2_FS"]
+  checkModels: ["ADC","T2_FS"]
   # model_scale: [[0, 6000], [0, 4500], [0, 4500]] # 对应模态的最小最大像素值，用于归一化
-  model_scale: [[0, 4500]]
+  model_scale: [[0, 6000],[0, 4500]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
 
 GCNC_loader:
