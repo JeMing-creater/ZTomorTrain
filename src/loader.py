@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import nibabel as nib
 import SimpleITK as sitk
+from datetime import datetime
 from easydict import EasyDict
 import torch.nn.functional as F
 from monai.utils import ensure_tuple_rep
@@ -58,7 +59,7 @@ class ConvertToMultiChannelBasedOnBratsClassesd_For_BraTS(monai.transforms.MapTr
             d[key] = self.converter(d[key])
         return d
 
-def read_csv_for_PM(config):
+def read_csv_for_GCM(config):
     csv_path = config.GCM_loader.root + '/' + 'Classification.xlsx'
     # 定义dtype转换，将第二列（索引为1）读作str
     dtype_converters = {1: str}
@@ -76,22 +77,22 @@ def read_csv_for_PM(config):
         
         key = row[1]  # 第2列作为键
         values = row[2]  # 第3列的数据读为label
-        
-        content_dict1[key] = values
+        time = row[4]  # 第4列的数据读为time，用于划分数据
+        content_dict1[key] = [values,time]
     
     for index, row in df2.iterrows():
         
         key = row[1]  # 第2列作为键
         values = row[2]  # 第3列的数据读为label
-        
-        content_dict2[key] = values
+        time = row[4] 
+        content_dict2[key] = [values,time]
 
     for index, row in df3.iterrows():
         
         key = row[1]  # 第2列作为键
         values = row[2]  # 第3列的数据读为label
-        
-        content_dict3[key] = values
+        time = row[4] 
+        content_dict3[key] = [values,time]
     
     return content_dict1, content_dict2, content_dict3
 
@@ -174,7 +175,7 @@ def load_MR_dataset_images(root, use_data, use_models, use_data_dict={}):
                 images_list.append({
                     'image': image,
                     'label': label,
-                    'class_label': use_data_dict[path]
+                    'class_label': use_data_dict[path][0]
                 })
             else:
                 images_list.append({
@@ -186,7 +187,7 @@ def load_MR_dataset_images(root, use_data, use_models, use_data_dict={}):
                 images_lack_list.append({
                     'image': image,
                     'label': label,
-                    'class_label': use_data_dict[path]
+                    'class_label': use_data_dict[path][0]
                 })
             else:
                 images_lack_list.append({
@@ -434,7 +435,38 @@ def check_example(data):
         index.append(num)
     return index
 
-def split_examples_to_data(data, config, lack_flag=False):
+
+def sort_keys_by_time(data: dict) -> list:
+    def parse_time(t):
+        if isinstance(t, datetime):
+            return t
+        if isinstance(t, (float, int)):
+            return datetime.fromtimestamp(t)
+        if not isinstance(t, str):
+            raise ValueError(f"Unsupported time format: {t}")
+
+        t = t.strip()
+        time_formats = [
+            '%Y-%m-%d %H:%M:%S',
+            '%Y/%m/%d %H:%M:%S',
+            '%Y/%m/%d  %H:%M:%S'
+        ]
+
+        for fmt in time_formats:
+            try:
+                return datetime.strptime(t, fmt)
+            except ValueError:
+                continue
+
+        raise ValueError(f"Unrecognized datetime format: {t}")
+
+
+    return sorted(
+        data.keys(),
+        key=lambda k: parse_time(data[k][1])
+    )
+
+def split_examples_to_data(data, config, lack_flag=False, loding=False):
     def read_file_to_list(file_path):
         with open(file_path, 'r', encoding='utf-8') as file:
             lines = file.readlines()
@@ -450,20 +482,21 @@ def split_examples_to_data(data, config, lack_flag=False):
                 selected_data.append(d)
         return selected_data
 
-    def load_example_to_data(data, example_path):
+    def load_example_to_data(data, example_path, loding=False):
         data_list = read_file_to_list(example_path)
         print(f'Loading examples from {example_path}')
-        data = select_example_to_data(data, data_list)
-        return data
+        if loding == True:
+            data_list = select_example_to_data(data, data_list)
+        return data_list
 
     train_example = config.GCM_loader.root + '/' + 'train_examples.txt'
     val_example = config.GCM_loader.root + '/' + 'val_examples.txt'
     test_example = config.GCM_loader.root + '/' + 'test_examples.txt'
     
-    train_data, val_data, test_data = load_example_to_data(data, train_example), load_example_to_data(data, val_example), load_example_to_data(data, test_example)
+    train_data, val_data, test_data = load_example_to_data(data, train_example, loding), load_example_to_data(data, val_example, loding), load_example_to_data(data, test_example, loding)
 
     if lack_flag == True:
-        train_data_lack, val_data_lack, test_data_lack = load_example_to_data(data, train_example), load_example_to_data(data, val_example), load_example_to_data(data, test_example)
+        train_data_lack, val_data_lack, test_data_lack = load_example_to_data(data, train_example, loding), load_example_to_data(data, val_example, loding), load_example_to_data(data, test_example, loding)
         return train_data, val_data, test_data, train_data_lack, val_data_lack, test_data_lack
     
     return train_data, val_data, test_data 
@@ -474,7 +507,7 @@ def get_dataloader_GCM(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, t
     use_models = config.GCM_loader.checkModels
     
     # data1: 腹膜转移分类; data2: 淋巴结同时序（手术）; data3: 淋巴结异时序（化疗后）
-    data1, data2, data3 = read_csv_for_PM(config)
+    data1, data2, data3 = read_csv_for_GCM(config)
     if config.GCM_loader.task == 'PM':
         use_data_dict = data1
     elif config.GCM_loader.task == 'NL_SS':
@@ -482,28 +515,50 @@ def get_dataloader_GCM(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, t
     else:
         use_data_dict = data3
 
-    use_data_list = list(use_data_dict.keys())
+    # 按时间顺序划分数据集
+    use_data_list = sort_keys_by_time(use_data_dict)
+
+    # 剔除不需要的病历号
     remove_list = config.GCM_loader.leapfrog
     use_data = [item for item in use_data_list if item not in remove_list]
     
-    data, _ = load_MR_dataset_images(datapath, use_data, use_models, use_data_dict)
+    # 在use_data处划分数据，避免并行导致的读取问题
+    if config.GCM_loader.fix_example != True:
+        if config.GCM_loader.time_limit != True:
+            random.shuffle(use_data)
+            print('Random Loading!')
+        train_use_data, val_use_data, test_use_data = split_list(use_data, [config.GCM_loader.train_ratio, config.GCM_loader.val_ratio, config.GCM_loader.test_ratio]) 
+        if config.GCM_loader.fusion == True:
+            need_val_data = val_use_data + test_use_data
+            val_use_data = need_val_data
+            test_use_data = need_val_data
+    else:
+        train_use_data, val_use_data, test_use_data = split_examples_to_data(use_data, config)
+
+    # 加载MR数据
+    train_data, _ = load_MR_dataset_images(datapath, train_use_data, use_models, use_data_dict)
+    val_data, _ = load_MR_dataset_images(datapath, val_use_data, use_models, use_data_dict)
+    test_data, _ = load_MR_dataset_images(datapath, test_use_data, use_models, use_data_dict)
+
+    # data, _ = load_MR_dataset_images(datapath, use_data, use_models, use_data_dict)
     
     load_transform, train_transform, val_transform = get_GCM_transforms(config)
     
-    if config.GCM_loader.fix_example == True:
-        train_data, val_data, test_data = split_examples_to_data(data, config)
-    else:
-        # shuffle data for objective verification
-        random.shuffle(data)
-        print('Random Loading!')
+    # if config.GCM_loader.fix_example == True:
+    #     train_data, val_data, test_data = split_examples_to_data(data, config)
+    # else:
+    #     # shuffle data for objective verification
+    #     if config.GCM_loader.time_limit != True:
+    #         random.shuffle(data)
+    #         print('Random Loading!')
 
-        train_data, val_data, test_data = split_list(data, [config.GCM_loader.train_ratio, config.GCM_loader.val_ratio, config.GCM_loader.test_ratio]) 
+    #     train_data, val_data, test_data = split_list(data, [config.GCM_loader.train_ratio, config.GCM_loader.val_ratio, config.GCM_loader.test_ratio]) 
 
-        # if not need test, can use fusion to fuse two data
-        if config.GCM_loader.fusion == True:
-            need_val_data = val_data + test_data
-            val_data = need_val_data
-            test_data = need_val_data
+    #     # if not need test, can use fusion to fuse two data
+    #     if config.GCM_loader.fusion == True:
+    #         need_val_data = val_data + test_data
+    #         val_data = need_val_data
+    #         test_data = need_val_data
 
     train_example = check_example(train_data)
     val_example = check_example(val_data)
@@ -536,14 +591,17 @@ def get_dataloader_GCNC(config: EasyDict) -> Tuple[torch.utils.data.DataLoader, 
     content_dict = read_csv_for_GCNC(config)
     
     use_data_list = list(content_dict.keys())
+    
+
     remove_list = config.GCNC_loader.leapfrog
     use_data = [item for item in use_data_list if item not in remove_list]
     
+
     data, data_lack = load_MR_dataset_images(datapath, use_data, use_models, content_dict)
     load_transform, train_transform, val_transform = get_GCNC_transforms(config)
 
     if config.GCNC_loader.fix_example == True:
-        train_data, val_data, test_data, train_data_lack, val_data_lack, test_data_lack = split_examples_to_data(data, config, lack_flag=True)
+        train_data, val_data, test_data, train_data_lack, val_data_lack, test_data_lack = split_examples_to_data(data, config, lack_flag=True, loding=True)
     else:
         random.shuffle(data)
         print('Random Loading!')
@@ -618,7 +676,7 @@ def get_dataloader_BraTS(config: EasyDict) -> Tuple[torch.utils.data.DataLoader,
 
 
 if __name__ == '__main__':
-    config = EasyDict(yaml.load(open('/workspace/Jeming/ZTomorTrain/config.yml', 'r', encoding="utf-8"), Loader=yaml.FullLoader))
+    config = EasyDict(yaml.load(open('/workspace/Jeming/ZT/config.yml', 'r', encoding="utf-8"), Loader=yaml.FullLoader))
     
     train_loader, val_loader, test_loader, _ = get_dataloader_GCM(config)
     # train_loader, val_loader, test_loader, _ = get_dataloader_GCNC(config)
