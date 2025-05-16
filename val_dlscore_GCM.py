@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = "2"
+os.environ['CUDA_VISIBLE_DEVICES'] = "3"
 import sys
 import csv
 from datetime import datetime
@@ -21,7 +21,7 @@ from timm.optim import optim_factory
 from src import utils
 from src.loader import get_dataloader_GCM as get_dataloader
 from src.loader import get_GCM_transforms as get_transforms
-from src.loader import read_csv_for_PM
+from src.loader import read_csv_for_GCM
 from src.optimizer import LinearWarmupCosineAnnealingLR
 from src.utils import Logger, write_example, resume_train_state, split_metrics, load_model_dict
 from src.eval import calculate_f1_score, specificity, quadratic_weighted_kappa, top_k_accuracy, calculate_metrics, accumulate_metrics, compute_final_metrics
@@ -173,7 +173,7 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
             
             # 遍历字典并写入键值对
             for key, value in dl_score.items():
-                writer.writerow([str(key), value, lable_score[key], use_data_dict[key]])
+                writer.writerow([str(key), value, lable_score[key], use_data_dict[key][0]])
 
     def change_to_xlxs(csv_file, save_path):
         df = pd.read_csv(csv_file, dtype={0: str})
@@ -185,7 +185,7 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
         df.to_excel(save_path, index=False, engine='openpyxl')
 
         os.remove(csv_file)
-    data1, data2, data3 = read_csv_for_PM(config)
+    data1, data2, data3 = read_csv_for_GCM(config)
 
     if config.GCM_loader.task == 'PM':
         use_data_dict = data1

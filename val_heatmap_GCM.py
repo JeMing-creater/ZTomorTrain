@@ -22,9 +22,6 @@ from easydict import EasyDict
 from monai.utils import ensure_tuple_rep
 from objprint import objstr
 from timm.optim import optim_factory
-# from monai.visualize import GradCAM
-from torchcam.methods import GradCAM
-# from src.grad_cam import GradCAM
 import torch.nn.functional as F
 from matplotlib import cm
 import matplotlib.pyplot as plt

@@ -435,7 +435,6 @@ def check_example(data):
         index.append(num)
     return index
 
-
 def sort_keys_by_time(data: dict) -> list:
     def parse_time(t):
         if isinstance(t, datetime):

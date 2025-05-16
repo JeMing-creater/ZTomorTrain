@@ -12,3 +12,4 @@ opencv-python
 openpyxl
 scikit-learn
 pandas
+matplotlib
