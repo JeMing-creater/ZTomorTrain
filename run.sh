@@ -1,6 +1,6 @@
 export OMP_NUM_THREADS=1
-export CUDA_VISIBLE_DEVICES=2,3
+export CUDA_VISIBLE_DEVICES=0,2
 torchrun \
   --nproc_per_node 2 \
-  --master_port 29551 \
+  --master_port 29550 \
   train_classify_GCM.py

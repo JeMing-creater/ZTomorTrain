@@ -356,7 +356,7 @@ class HWAUNETR(nn.Module):
     def __init__(self, in_chans=4, out_chans=3, fussion = [1,2,4,8], kernel_sizes=[4, 2, 2, 2], depths=[1, 1, 1, 1], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8],
                 out_indices=[0, 1, 2, 3]):
         super(HWAUNETR, self).__init__()
-        self.fussion = HWABlock(in_chans=in_chans, kernel_sizes = fussion,  d_state = 16, d_conv = 4, expand = 2, num_slices = num_slices_list[0])
+        # self.fussion = HWABlock(in_chans=in_chans, kernel_sizes = fussion,  d_state = 16, d_conv = 4, expand = 2, num_slices = num_slices_list[0])
         self.Encoder = Encoder(in_chans=in_chans, kernel_sizes=kernel_sizes, depths=depths, dims=dims, num_slices_list = num_slices_list,
                 out_indices=out_indices, heads=heads)
 
@@ -371,7 +371,7 @@ class HWAUNETR(nn.Module):
         self.SegHead = nn.ConvTranspose3d(dims[0],out_chans,kernel_size=kernel_sizes[0],stride=kernel_sizes[0])
         
     def forward(self, x):
-        x = self.fussion(x)
+        # x = self.fussion(x)
         
         outs, feature_out = self.Encoder(x)
         

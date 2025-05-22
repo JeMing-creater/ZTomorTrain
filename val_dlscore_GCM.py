@@ -29,6 +29,8 @@ from src.eval import calculate_f1_score, specificity, quadratic_weighted_kappa, 
 from src.model.HWAUNETR_class import HWAUNETR
 from src.model.SwinUNETR import MultiTaskSwinUNETR
 from monai.networks.nets import SwinUNETR
+from src.model.ResNet import ResNet3DClassifier as ResNet
+from src.model.Vit import ViT3D
 
 
 
@@ -225,8 +227,11 @@ if __name__ == '__main__':
     accelerator.print(objstr(config))
     
     accelerator.print('load model...')
-    model = HWAUNETR(in_chans=len(config.GCM_loader.checkModels), fussion = [1,2,4,8], kernel_sizes=[4, 2, 2, 2], depths=[1, 1, 1, 1], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8],
-                out_indices=[0, 1, 2, 3])
+    # model = HWAUNETR(in_chans=len(config.GCM_loader.checkModels), fussion = [1,2,4,8], kernel_sizes=[4, 2, 2, 2], depths=[1, 1, 1, 1], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8],
+    #             out_indices=[0, 1, 2, 3])
+    model = ResNet(in_channels=len(config.GCM_loader.checkModels), pretrained=False)
+
+
     model = load_model(model, accelerator, config.finetune.GCM.checkpoint)
 
 
@@ -254,6 +259,6 @@ if __name__ == '__main__':
 
     # start valing
     accelerator.print("Start Valing! ")
-    # val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
+    val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
     compute_dl_score_for_example(model, config, post_trans, example)
 

@@ -25,6 +25,8 @@ from src.eval import calculate_f1_score, specificity, quadratic_weighted_kappa, 
 from src.model.HWAUNETR_class import HWAUNETR
 from src.model.SwinUNETR import MultiTaskSwinUNETR
 from monai.networks.nets import SwinUNETR
+from src.model.ResNet import ResNet3DClassifier as ResNet
+from src.model.Vit import ViT3D
 
 def train_one_epoch(model: torch.nn.Module, loss_functions: Dict[str, torch.nn.modules.loss._Loss],
           train_loader: torch.utils.data.DataLoader,
@@ -178,15 +180,18 @@ if __name__ == '__main__':
     
     accelerator.print('load model...')
     # model = MultiTaskSwinUNETR(img_size=config.GCM_loader.target_size, in_channels=3, num_tasks=len(config.GCM_loader.checkPathology), num_classes_per_task=1)
-    model = HWAUNETR(in_chans=len(config.GCM_loader.checkModels), 
-                     fussion = [1,2,4,8], 
-                     kernel_sizes=[4, 2, 2, 2], 
-                     depths=[1, 1, 1, 1], 
-                     dims=[48, 96, 192, 384], 
-                     heads=[1, 2, 4, 4], 
-                     hidden_size=768, 
-                     num_slices_list = [64, 32, 16, 8], 
-                     out_indices=[0, 1, 2, 3])
+    # model = HWAUNETR(in_chans=len(config.GCM_loader.checkModels), 
+    #                  fussion = [1,2,4,8], 
+    #                  kernel_sizes=[4, 2, 2, 2], 
+    #                  depths=[1, 1, 1, 1], 
+    #                  dims=[48, 96, 192, 384], 
+    #                  heads=[1, 2, 4, 4], 
+    #                  hidden_size=768, 
+    #                  num_slices_list = [64, 32, 16, 8], 
+    #                  out_indices=[0, 1, 2, 3])
+    model = ResNet(in_channels=len(config.GCM_loader.checkModels), pretrained=False)
+    # model = ViT3D(in_channels=len(config.GCM_loader.checkModels), img_size=config.GCM_loader.target_size, patch_size=(4, 4, 4), embed_dim=768, depth=12, num_heads=12, mlp_dim=3072)
+    
     accelerator.print('load dataset...')
     train_loader, val_loader, test_loader, example = get_dataloader(config)
 

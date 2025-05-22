@@ -3,6 +3,7 @@ import sys
 from datetime import datetime
 from typing import Dict
 
+
 import monai
 import torch
 import yaml
@@ -60,12 +61,12 @@ def train_one_epoch(model: torch.nn.Module, loss_functions: Dict[str, torch.nn.m
         batch_acc = metrics[metric_name].aggregate()[0].to(accelerator.device)
         if accelerator.num_processes > 1:
             batch_acc = accelerator.reduce(batch_acc) / accelerator.num_processes
-        metric.update({
-            f'Train/mean {metric_name}': float(batch_acc.mean()),
-            f'Train/Object1 {metric_name}': float(batch_acc[0]),
-            f'Train/Object2 {metric_name}': float(batch_acc[1]),
-            f'Train/Object3 {metric_name}': float(batch_acc[2])
-        })
+        metric_dice = {}
+        metric_dice[f'Train/mean {metric_name}'] = float(batch_acc.mean())
+        for i in range(len(config.GCM_loader.checkModels)):
+            metric_dice[f'Train/ {config.GCM_loader.checkModels[i]}'] = float(batch_acc[i])
+        metric.update(metric_dice)
+
     accelerator.log(metric, step=epoch)
     return step
 
@@ -97,28 +98,22 @@ def val_one_epoch(model: torch.nn.Module,
         flag = 'Val'
     for metric_name in metrics:
         batch_acc = metrics[metric_name].aggregate()[0].to(accelerator.device)
-        
         if accelerator.num_processes > 1:
             batch_acc = accelerator.reduce(batch_acc) / accelerator.num_processes
         metrics[metric_name].reset()
+        metric_dice = {}
+        metric_dice[f'{flag}/mean {metric_name}'] = float(batch_acc.mean())
+        for i in range(len(config.GCM_loader.checkModels)):
+            metric_dice[f'{flag}/ {config.GCM_loader.checkModels[i]}'] = float(batch_acc[i])
+        metric.update(metric_dice)
+
         if metric_name == 'dice_metric':
-            metric.update({
-                f'{flag}/mean {metric_name}': float(batch_acc.mean()),
-                f'{flag}/Object1 {metric_name}': float(batch_acc[0]),
-                f'{flag}/Object2 {metric_name}': float(batch_acc[1]),
-                f'{flag}/Object3 {metric_name}': float(batch_acc[2])
-            })
             dice_acc = torch.Tensor([metric[f'{flag}/mean dice_metric']]).to(accelerator.device)
             dice_class = batch_acc
         else:
-            metric.update({
-                f'{flag}/mean {metric_name}': float(batch_acc.mean()),
-                f'{flag}/Object1 {metric_name}': float(batch_acc[0]),
-                f'{flag}/Object2 {metric_name}': float(batch_acc[1]),
-                f'{flag}/Object3 {metric_name}': float(batch_acc[2])
-            })
             hd95_acc = torch.Tensor([metric[f'{flag}/mean hd95_metric']]).to(accelerator.device)
             hd95_class = batch_acc
+
     accelerator.log(metric, step=epoch)
     return dice_acc, dice_class, hd95_acc, hd95_class, step
 
@@ -133,12 +128,10 @@ if __name__ == '__main__':
     accelerator.print(objstr(config))
     
     accelerator.print('load model...')
-    model = HWAUNETR(in_chans=3, out_chans=3, fussion = [1, 2, 4, 8], kernel_sizes=[4, 2, 2, 2], depths=[2, 2, 2, 2], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8], out_indices=[0, 1, 2, 3])
-    # model = SwinUNETR(
-    #     img_size=(128,128,64),
-    #     in_channels=3,
-    #     out_channels=3,
-    #     feature_size=48)
+    model = HWAUNETR(in_chans=len(config.GCM_loader.checkModels), 
+                     out_chans=len(config.GCM_loader.checkModels), 
+                     fussion = [1, 2, 4, 8], kernel_sizes=[4, 2, 2, 2], depths=[2, 2, 2, 2], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8], out_indices=[0, 1, 2, 3])
+    
     
     accelerator.print('load dataset...')
     train_loader, val_loader, test_loader, example = get_dataloader(config)
