@@ -107,17 +107,37 @@ def read_csv_for_GCNC(config):
     
     # 创建空列表
     content_dict = {}
+
+
     # 遍历DataFrame的每一行，从第二行开始
     for index, row in df.iterrows():
+        
         key = row['病理号']
         # TODO: 此处只做高低表达分类记录。后续数据补全可以添加阴阳性分类
         # 如果指标缺失，则跳过读取
         if isinstance(row['PD-L1'], (int, float))!= True:
             continue
+        
+        # TODO: xlxs文件内部内容修改
+        if row['M分期'] == 'x':
+            row['M分期'] = 1
+        elif row['M分期'] == 3:
+            row['M分期'] = 0
+
+        if isinstance(row['M分期'], (int, float))!= True:
+            continue
+
+        label_dict = {'PD-L1': -1, 'M': -1}
+
         if row['PD-L1'] > 20:
-            content_dict[key] = 1
+            label_dict['PD-L1'] = 1
         else:
-            content_dict[key] = 0
+            label_dict['PD-L1'] = 0
+        
+        label_dict['M'] = row['M分期']
+
+        if label_dict['PD-L1'] != -1 and label_dict['M'] != -1:
+            content_dict[key] = label_dict
     return content_dict
 
 def read_usedata(file_path):
@@ -147,8 +167,16 @@ def load_MR_dataset_images(root, use_data, use_models, use_data_dict={}):
         image = []
         label = []
         
+        
         for model in models:
-            if model in use_models:
+            if 'WI' in model:
+                check_model = model.replace('WI', '')
+            elif model == 'CT1':
+                check_model = 'T1+C'
+            elif model == 'T1+c':
+                check_model = 'T1+C'
+
+            if check_model in use_models:
                 if not os.path.exists(root + '/' + path + '/' + model ):
                     print(f"{path} does not have {model} file. ")
                     lack_model_flag = True
@@ -157,7 +185,7 @@ def load_MR_dataset_images(root, use_data, use_models, use_data_dict={}):
                     print(f"{path} does not have {model} image file.")
                     lack_model_flag = True
                     break
-
+                
                 image.append(root + '/' + path + '/' + model + '/' + path + '.nii.gz')
                 if not os.path.exists(root + '/' + path + '/' + model + '/' + path + 'seg.nii.gz'):
                     print(f"Label file not found for {path} in model {model}. ")
@@ -175,7 +203,8 @@ def load_MR_dataset_images(root, use_data, use_models, use_data_dict={}):
                 images_list.append({
                     'image': image,
                     'label': label,
-                    'class_label': use_data_dict[path][0]
+                    'pdl1_label': use_data_dict[path]['PD-L1'],
+                    'm_label' : use_data_dict[path]['M'],
                 })
             else:
                 images_list.append({
@@ -187,13 +216,16 @@ def load_MR_dataset_images(root, use_data, use_models, use_data_dict={}):
                 images_lack_list.append({
                     'image': image,
                     'label': label,
-                    'class_label': use_data_dict[path][0]
+                    'pdl1_label': use_data_dict[path]['PD-L1'],
+                    'm_label' : use_data_dict[path]['M'],
                 })
             else:
                 images_lack_list.append({
                     'image': image,
                     'label': label,
                     })  
+        # print(f'{path} example has been loaded')
+
     return images_list, images_lack_list
 
 def load_brats2021_dataset_images(root):
@@ -327,6 +359,7 @@ def get_Brats_transforms(config: EasyDict) -> Tuple[
     ])
     return train_transform, val_transform
 
+
 class MultiModalityDataset(monai.data.Dataset):
     def __init__(self, data, loadforms, transforms, over_label=False, over_add=0, use_class=True):
         self.data = data
@@ -405,7 +438,7 @@ class MultiModalityDataset(monai.data.Dataset):
         result = self.transforms(result)
 
         if self.use_class == True:
-            return {'image': result['image'], 'label': result['label'], 'class_label': torch.tensor(item['class_label']).unsqueeze(0).long()}
+            return {'image': result['image'], 'label': result['label'], 'pdl1_label': torch.tensor(item['pdl1_label']).unsqueeze(0).long(), 'm_label': torch.tensor(item['m_label']).unsqueeze(0).long()}
         else:
             return {'image': result['image'], 'label': result['label']}
 
@@ -677,15 +710,15 @@ def get_dataloader_BraTS(config: EasyDict) -> Tuple[torch.utils.data.DataLoader,
 if __name__ == '__main__':
     config = EasyDict(yaml.load(open('/workspace/Jeming/ZT/config.yml', 'r', encoding="utf-8"), Loader=yaml.FullLoader))
     
-    train_loader, val_loader, test_loader, _ = get_dataloader_GCM(config)
-    # train_loader, val_loader, test_loader, _ = get_dataloader_GCNC(config)
+    # train_loader, val_loader, test_loader, _ = get_dataloader_GCM(config)
+    train_loader, val_loader, test_loader, _ = get_dataloader_GCNC(config)
     
     for i, batch in enumerate(train_loader):
         try:
             print(batch['image'].shape)
             print(batch['label'].shape)
-            print(batch['class_label'].shape)
-            # print(batch['class_label'])
+            print(batch['pdl1_label'].shape)
+            print(batch['m_label'].shape)
         except Exception as e:
             print(f"Error occurred while loading batch {i}: {e}")
             continue 
@@ -694,8 +727,8 @@ if __name__ == '__main__':
         try:
             print(batch['image'].shape)
             print(batch['label'].shape)
-            print(batch['class_label'].shape)
-            # print(batch['class_label'])
+            print(batch['pdl1_label'].shape)
+            print(batch['m_label'].shape)
         except Exception as e:
             print(f"Error occurred while loading batch {i}: {e}")
             continue 
@@ -704,8 +737,8 @@ if __name__ == '__main__':
         try:
             print(batch['image'].shape)
             print(batch['label'].shape)
-            print(batch['class_label'].shape)
-            # print(batch['class_label'])
+            print(batch['pdl1_label'].shape)
+            print(batch['m_label'].shape)
         except Exception as e:
             print(f"Error occurred while loading batch {i}: {e}")
             continue
