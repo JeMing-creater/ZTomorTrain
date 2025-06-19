@@ -104,21 +104,14 @@ def resume_train_state(
                 base_path + "/epoch.pth.tar", map_location="gpu" if accelerator.is_local_main_process else "cpu"
             )
             starting_epoch = epoch_checkpoint["epoch"] + 1
-            best_top_1 = epoch_checkpoint["best_top_1"]
-            best_test_top_1 = epoch_checkpoint["best_test_top_1"]
+            best_accuracy = epoch_checkpoint["best_accuracy"]
+            best_test_accuracy = epoch_checkpoint["best_test_accuracy"]
             best_metrics = epoch_checkpoint["best_metrics"]
             best_test_metrics = epoch_checkpoint["best_test_metrics"]
             step = starting_epoch * len(train_loader)
-            # model = load_pretrain_model(
-            #     base_path + "/pytorch_model.bin", model, accelerator
-            # )
-            # optimizer.load_state_dict(torch.load(base_path + "/optimizer.bin"))
-            # scheduler.load_state_dict(torch.load(base_path + "/scheduler.bin"))
-
             accelerator.load_state(base_path)
-
             accelerator.print(
-                f"Loading training state successfully! Start training from {starting_epoch}, Best Acc: {best_top_1}"
+                f"Loading training state successfully! Start training from {starting_epoch}, Best Acc: {best_accuracy}"
             )
             return (
                 model,
@@ -126,8 +119,8 @@ def resume_train_state(
                 scheduler,
                 starting_epoch,
                 step,
-                best_top_1,
-                best_test_top_1,
+                best_accuracy,
+                best_test_accuracy,
                 best_metrics,
                 best_test_metrics,
             )
@@ -155,11 +148,6 @@ def resume_train_state(
         best_hd95 = epoch_checkpoint["best_hd95"]
         best_hd95_metrics = epoch_checkpoint["best_hd95_metrics"]
         step = starting_epoch * len(train_loader)
-        # model = load_pretrain_model(
-        #     base_path + "/pytorch_model.bin", model, accelerator
-        # )
-        # optimizer.load_state_dict(torch.load(base_path + "/optimizer.bin"))
-        # scheduler.load_state_dict(torch.load(base_path + "/scheduler.bin"))
         accelerator.load_state(base_path)
         accelerator.print(
             f"Loading training state successfully! Start training from {starting_epoch}, Best Acc: {best_score}"

@@ -396,5 +396,5 @@ if __name__ == "__main__":
             f"{os.getcwd()}/model_store/{config.finetune.GCM.checkpoint}/checkpoint/epoch.pth.tar",
         )
 
-    accelerator.print(f"best test accuracy: {best_test_accuracy}")
+    accelerator.print(f"best top1: {best_test_accuracy}")
     accelerator.print(f"best metrics: {best_test_metrics}")

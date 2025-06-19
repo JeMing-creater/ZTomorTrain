@@ -1,7 +1,8 @@
 trainer:
-  choose_model: D_GGM_seg   # [D_GGM, FMUNETR_class, FMUNETR_seg, ResNet, Vit, TP_Mamba]
+  choose_model: D_GGMM   # [D_GGMM, D_GGM, FMUNETR_class, FMUNETR_seg, ResNet, Vit, TP_Mamba]
   choose_dataset: GCNC   # [GCM, GCNC, BraTS]
-  num_epochs: 300
+  num_epochs: 600
+  seg_epochs: 300
   warmup: 2
   batch_size: 2
   resume: True
@@ -26,7 +27,7 @@ finetune:
   GCNC:
     # checkpoint: TFMUNETR_multimodals_T1WI_T1WI_C
     # checkpoint: TFMUNETR_multimodals_all
-    checkpoint: D_GGM_multimodals_all
+    checkpoint: D_GGMM_multimodals_all
   BraTS:
     checkpoint: TFMUNETR_multimodals
 

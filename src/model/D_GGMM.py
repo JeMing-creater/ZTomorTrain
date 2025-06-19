@@ -1,5 +1,6 @@
 import os
 import math
+from cv2 import CLAHE
 import torch
 import warnings
 import torch.nn as nn
@@ -88,12 +89,15 @@ class DLK(nn.Module):
 
 
 class DLKModule(nn.Module):
-    def __init__(self, dim):
+
+    def __init__(self, dim, num_slices=4, shallow=True):
         super().__init__()
 
         self.proj_1 = nn.Conv3d(dim, dim, 1)
         self.act = nn.GELU()
-        self.spatial_gating_unit = DLK(dim)
+        self.spatial_gating_unit = GGM_Block(
+            in_dim=dim, out_dim=dim, num_slices=num_slices, shallow=shallow
+        )
         self.proj_2 = nn.Conv3d(dim, dim, 1)
 
     def forward(self, x):
@@ -107,10 +111,11 @@ class DLKModule(nn.Module):
 
 
 class DLKBlock(nn.Module):
-    def __init__(self, dim, shallow=False, drop_path=0.0):
+
+    def __init__(self, dim, num_slices=4, shallow=False, drop_path=0.0):
         super().__init__()
         self.norm_layer = nn.LayerNorm(dim, eps=1e-6)
-        self.attn = DLKModule(dim)
+        self.attn = DLKModule(dim, num_slices=num_slices, shallow=shallow)
         self.mlp = Mlp(dim, shallow)
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         layer_scale_init_value = 1e-6
@@ -141,7 +146,7 @@ class DLKBlock(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, in_chans, depths, dims, drop_path_rate):
+    def __init__(self, in_chans, num_slices_list, depths, dims, drop_path_rate):
         super().__init__()
 
         self.downsample_layers = nn.ModuleList()
@@ -162,7 +167,12 @@ class Encoder(nn.Module):
                 shallow = True
             stage = nn.Sequential(
                 *[
-                    DLKBlock(dim=dims[i], drop_path=dp_rates[cur + j], shallow=shallow)
+                    DLKBlock(
+                        dim=dims[i],
+                        num_slices=num_slices_list[i],
+                        drop_path=dp_rates[cur + j],
+                        shallow=shallow,
+                    )
                     for j in range(depths[i])
                 ]
             )
@@ -237,7 +247,7 @@ def channel_to_first(x):
     return x.permute(0, 4, 1, 2, 3)
 
 
-class Attention(nn.Module):
+class GGM(nn.Module):
     def __init__(
         self,
         in_dim=1,
@@ -250,7 +260,7 @@ class Attention(nn.Module):
         step=1,
         goble=True,
     ):
-        super(Attention, self).__init__()
+        super(GGM, self).__init__()
 
         # 大核全局扫描
         if goble == True:
@@ -291,7 +301,6 @@ class Attention(nn.Module):
         self.mamba.conv1d_s = None
         self.mamba.x_proj_s = None
         self.mamba.dt_proj_s = None
-        
 
         # 调整通道Conv
         # self.conv = nn.Conv3d(in_dim, out_dim, 3, 1, 1)
@@ -325,9 +334,9 @@ class Attention(nn.Module):
         max_att, _ = torch.max(att, dim=1, keepdim=True)
         att = torch.cat([avg_att, max_att], dim=1)
         att = self.spatial_se(att)
-        output = att1 * att[:, 0, :, :, :].unsqueeze(1) + att2 * att[:, 1, :, :, :].unsqueeze(
-            1
-        )
+        output = att1 * att[:, 0, :, :, :].unsqueeze(1) + att2 * att[
+            :, 1, :, :, :
+        ].unsqueeze(1)
 
         # x = self.conv(output)
         x = output
@@ -335,9 +344,9 @@ class Attention(nn.Module):
         return x, q, k, v
 
 
-class AttentionBlock(nn.Module):
-    def __init__(self, in_dim=3, out_dim=32, kernel_size=3, num_slices=4, shallow=True):
-        super(AttentionBlock, self).__init__()
+class GGM_Block(nn.Module):
+    def __init__(self, in_dim=3, out_dim=32, num_slices=4, shallow=True):
+        super(GGM_Block, self).__init__()
         self.in_dim = in_dim
         self.out_dim = out_dim
         if shallow == True:
@@ -345,15 +354,32 @@ class AttentionBlock(nn.Module):
         else:
             self.act = Swish()
 
-        self.gobel_attention = Attention(
+        self.gobel_attention = GGM(
             in_dim=in_dim // 2, out_dim=out_dim, num_slices=num_slices, goble=True
         )
 
-        self.local_attention = Attention(
+        self.local_attention = GGM(
             in_dim=in_dim // 2, out_dim=out_dim, num_slices=num_slices, goble=False
         )
 
         self.downsample = Convblock(in_dim * 2, out_dim, shallow=shallow)
+        self.shallow = shallow
+        if self.shallow == True:
+            self.pool = nn.MaxPool1d(kernel_size=8, stride=8)
+            self.up = nn.Conv3d(
+                in_channels=out_dim // 8, out_channels=out_dim, kernel_size=1
+            )
+
+    def auto_shape(self, N):
+        cube_root = round(N ** (1 / 3))
+        for d in range(cube_root, 0, -1):
+            if N % d != 0:
+                continue
+            rest = N // d
+            for h in range(int(math.sqrt(rest)), 0, -1):
+                if rest % h == 0:
+                    w = rest // h
+                    return (d, h, w)
 
     def forward(self, x):
         x_0, x_1 = x.chunk(2, dim=1)
@@ -361,12 +387,24 @@ class AttentionBlock(nn.Module):
         x_1, _, q, _ = self.local_attention(x_1)
 
         B, C, H, W, D = x.shape
+        # q, k, v = q.unsqueeze(1), k.unsqueeze(1), v.unsqueeze(1)
+        if self.shallow == True:
+            b_s, c_s, n = q.shape  # 记录原始尺寸，让out_a转换成原始尺寸
+            q = self.pool(q)
+            k = self.pool(k)
+            v = self.pool(v)
 
         q, k, v = q.unsqueeze(1), k.unsqueeze(1), v.unsqueeze(1)
         attn = (q.transpose(-2, -1) @ k).softmax(-1)
-        out_a = (v @ attn.transpose(-2, -1))
+        out_a = v @ attn.transpose(-2, -1)
 
-        out_a = out_a.view(B, -1, H, W, D)
+        if self.shallow == True:
+            d, h, w = self.auto_shape(n)
+            # out_a = F.interpolate(out_a, size=n, mode="nearest")
+            out_a = out_a.view(B, -1, h, w, d)
+            out_a = self.up(out_a)
+        else:
+            out_a = out_a.view(B, -1, H, W, D)
 
         x_f = torch.cat([x_0, x_1], dim=1)
 
@@ -376,27 +414,15 @@ class AttentionBlock(nn.Module):
         return x
 
 
-class D_GGM(nn.Module):
+class Seg_Decoder(nn.Module):
     def __init__(
         self,
-        in_channels=3,
         out_channels=1,
-        depths=[2, 2, 2, 2],
         dims=[48, 96, 192, 384],
-        kernel_size=3,
         out_dim=64,
         num_slices_list=[64, 32, 16, 8],
-        drop_path_rate=0.3,
     ):
         super().__init__()
-
-        self.dnet_down = Encoder(
-            in_chans=in_channels,
-            depths=depths,
-            dims=dims,
-            drop_path_rate=drop_path_rate,
-        )
-
         c1_in_channels, c2_in_channels, c3_in_channels, c4_in_channels = (
             dims[0],
             dims[1],
@@ -404,24 +430,21 @@ class D_GGM(nn.Module):
             dims[3],
         )
 
-        self.block2 = AttentionBlock(
+        self.block2 = GGM_Block(
             in_dim=c2_in_channels,
             out_dim=out_dim,
-            kernel_size=kernel_size,
-            shallow=True,
+            shallow=False,
             num_slices=num_slices_list[1],
         )
-        self.block3 = AttentionBlock(
+        self.block3 = GGM_Block(
             in_dim=c3_in_channels,
             out_dim=out_dim,
-            kernel_size=kernel_size,
             shallow=False,
             num_slices=num_slices_list[2],
         )
-        self.block4 = AttentionBlock(
+        self.block4 = GGM_Block(
             in_dim=c4_in_channels,
             out_dim=out_dim,
-            kernel_size=kernel_size,
             shallow=False,
             num_slices=num_slices_list[3],
         )
@@ -437,7 +460,7 @@ class D_GGM(nn.Module):
         self.o1_u = nn.ConvTranspose3d(out_dim, out_dim, kernel_size=4, stride=4)
         self.o2_u = nn.ConvTranspose3d(out_dim * 2, out_dim, kernel_size=2, stride=2)
 
-        self.head = nn.Conv3d(out_dim * 2, out_channels, kernel_size=1, bias=False)
+        self.SEG_head = nn.Conv3d(out_dim * 2, out_channels, kernel_size=1, bias=False)
 
     def Upsample(self, x, size, align_corners=False):
         """
@@ -447,9 +470,8 @@ class D_GGM(nn.Module):
             x, size=size, mode="trilinear", align_corners=align_corners
         )
 
-    def forward(self, x):
-        c1, c2, c3, c4 = self.dnet_down(x)
-
+    def forward(self, encode_dim):
+        c1, c2, c3, c4 = encode_dim
         _c4 = self.block4(c4)
         _c4 = self.Upsample(_c4, c3.size()[2:])
         _c3 = self.block3(c3)
@@ -471,9 +493,113 @@ class D_GGM(nn.Module):
         output = self.o1_u(output)
         output2 = self.o2_u(output2)
 
-        out = self.head(torch.cat((output, output2), dim=1))
+        SEG_out = self.SEG_head(torch.cat((output, output2), dim=1))
 
-        return out
+        return SEG_out
+        return x
+
+
+class Class_Decoder(nn.Module):
+
+    def __init__(self, dim=384, class1_channels=1, class2_channels=None):
+        super().__init__()
+        # 添加全局平均池化层
+        self.global_avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
+
+        # # 最后一层全连接层用于分类任务
+        # # 为每个任务定义独立的分类头
+        # self.task_heads = nn.ModuleList([
+        #     nn.Sequential(
+        #         nn.Linear(48*2, 64),  # 全连接层
+        #         nn.ReLU(),
+        #         nn.Linear(64, 1)  # 输出层
+        #     ) for _ in range(num_tasks)
+        # ])
+        self.task1_head = nn.Sequential(
+            nn.Linear(dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, class1_channels),  # 全连接层  # 输出层
+        )
+        self.mutil_task = False
+        if class2_channels != None:
+            self.task2_head = nn.Sequential(
+                nn.Linear(dim, 64),
+                nn.ReLU(),
+                nn.Linear(64, class2_channels),  # 全连接层  # 输出层
+            )
+            self.mutil_task = True
+
+    def forward(self, hidden_downsample):
+
+        # 展平特征并送入全连接层
+        features = self.global_avg_pool(hidden_downsample)
+        features = torch.flatten(features, start_dim=1)
+        # 对每个任务应用独立的分类头，并收集结果
+        # task_outputs = [task_head(features) for task_head in self.task_heads]
+        task1_outputs = self.task1_head(features)
+        if self.mutil_task == True:
+            task2_outputs = self.task2_head(features)
+            # 在channels维度上拼接所有任务的输出
+
+            return task1_outputs, task2_outputs
+        else:
+            return task1_outputs, None
+
+
+class D_GGMM(nn.Module):
+
+    def __init__(
+        self,
+        in_channels=3,
+        out_channels=3,
+        class1_channels=1,
+        class2_channels=1,
+        depths=[2, 2, 2, 2],
+        dims=[48, 96, 192, 384],
+        kernel_size=3,
+        out_dim=64,
+        num_slices_list=[64, 32, 16, 8],
+        drop_path_rate=0.3,
+    ):
+        super().__init__()
+
+        self.dnet_down = Encoder(
+            in_chans=in_channels,
+            depths=depths,
+            dims=dims,
+            num_slices_list=num_slices_list,
+            drop_path_rate=drop_path_rate,
+        )
+
+        self.seg_decoder = Seg_Decoder(
+            out_channels=out_channels,
+            dims=dims,
+            out_dim=out_dim,
+            num_slices_list=num_slices_list,
+        )
+
+        self.class_decoder = Class_Decoder(
+            dim=dims[-1],
+            class1_channels=class1_channels,
+            class2_channels=class2_channels,
+        )
+
+    def Upsample(self, x, size, align_corners=False):
+        """
+        Wrapper Around the Upsample Call
+        """
+        return nn.functional.interpolate(
+            x, size=size, mode="trilinear", align_corners=align_corners
+        )
+
+    def forward(self, x):
+        c1, c2, c3, c4 = self.dnet_down(x)
+
+        CLS_out = self.class_decoder(c4)
+
+        SEG_out = self.seg_decoder((c1, c2, c3, c4))
+
+        return CLS_out, SEG_out
 
 
 def benchmark_model(
@@ -482,6 +608,7 @@ def benchmark_model(
     import time
     from thop import profile, clever_format
     from ptflops import get_model_complexity_info
+
     """
     计算 PyTorch 模型的 FPS（Frames Per Second）、参数量（MParam）和计算量（GLOPs）
     :param model: PyTorch nn.Module
@@ -525,13 +652,15 @@ if __name__ == "__main__":
     x = torch.randn(size=(2, 3, 128, 128, 64)).to(device)
     # test_x = torch.randn(size=(2, 64, 88, 88)).to(device)
 
-    model = D_GGM(
-        in_channels=3,
-        out_channels=2,
+    model = D_GGMM(
+        in_channels=3, out_channels=3, class1_channels=1, class2_channels=1
     ).to(device)
-    # module = AttentionBlock(in_dim=64, out_dim=32, kernel_size=3, mlp_ratio=4, shallow=True).to(device)
 
-    print(model(x).size())
+    CLS_out, SEG_out = model(x)
+
+    print(CLS_out[0].size())
+    print(CLS_out[1].size())
+    print(SEG_out.size())
 
     # benchmark_model(
     #     model,

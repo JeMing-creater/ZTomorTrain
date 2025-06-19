@@ -1,10 +1,11 @@
 from monai.networks.nets import SwinUNETR
 from src.model.HWAUNETR_class import HWAUNETR as FMUNETR_class
 from src.model.HWAUNETR_seg import HWAUNETR as FMUNETR_seg
-from src.model.resnet import resnet50
+from src.model.ResNet import resnet50
 from src.model.Vit import Vit as Vit
 from src.model.TP_Mamba import SAM_MS
 from src.model.D_GGM import D_GGM
+from src.model.D_GGMM import D_GGMM as D_GGMM
 
 
 def get_model(config):
@@ -61,6 +62,28 @@ def get_model(config):
                 num_slices_list=[64, 32, 16, 8],
                 out_indices=[0, 1, 2, 3],
             )
+    elif "D_GGMM" in config.trainer.choose_model:
+        if config.trainer.choose_dataset == "GCM":
+            use_config = config.GCM_loader
+            class1_channels = 1
+            class2_channels = None
+        elif config.trainer.choose_dataset == "GCNC":
+            use_config = config.GCNC_loader
+            class1_channels = 1
+            class2_channels = 1
+        model = D_GGMM(
+            in_channels=len(use_config.checkModels),
+            out_channels=len(use_config.checkModels),
+            class1_channels=class1_channels,
+            class2_channels=class2_channels,
+            depths=[2, 2, 2, 2],
+            dims=[48, 96, 192, 384],
+            kernel_size=3,
+            out_dim=64,
+            num_slices_list=[64, 32, 16, 8],
+            drop_path_rate=0.3,
+        )
+
     elif "D_GGM" in config.trainer.choose_model:
         if config.trainer.choose_dataset == "GCM":
             use_config = config.GCM_loader

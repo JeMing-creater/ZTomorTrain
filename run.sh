@@ -4,4 +4,4 @@ export OMP_NUM_THREADS=1
 torchrun \
   --nproc_per_node 4 \
   --master_port 29550 \
-  train_seg_GCNC.py
+  D_Mutli_Train.py
