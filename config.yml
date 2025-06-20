@@ -1,23 +1,33 @@
 trainer:
-  num_epochs: 300
-  val_epochs: 10
+  choose_model: D_GGMM   # [D_GGMM, D_GGM, FMUNETR_class, FMUNETR_seg, ResNet, Vit, TP_Mamba]
+  choose_dataset: GCNC   # [GCM, GCNC, BraTS]
+  num_epochs: 600
+  seg_epochs: 300
   warmup: 2
-  batch_size: 4
+  batch_size: 2
   resume: True
   lr: 0.001
   min_lr: 0.0000001
   optimizer: adamw
+  # optimizer: adam
   weight_decay: 0.05
-  weight_decay_end: 0.04
+  # weight_decay: 1e-5
+  betas: [0.9, 0.95]
 
 finetune:
   GCM:
-    checkpoint: TFMUNETR_multimodals_ADC_T2
+    # checkpoint: TFMUNETR_multimodals_ADC_T2_Seg
     # checkpoint: TFMUNETR_singlemodals_ADC
     # checkpoint: TFMUNETR_singlemodals_T2FS
+    # checkpoint: ResNet_50
+    # checkpoint: TP_Mamba
+    # checkpoint: ResNet
+    checkpoint: Vit
+    # checkpoint: FMUNETR_class
   GCNC:
     # checkpoint: TFMUNETR_multimodals_T1WI_T1WI_C
-    checkpoint: TFMUNETR_multimodals_T1WI_T2WI_C_seg
+    # checkpoint: TFMUNETR_multimodals_all
+    checkpoint: D_GGMM_multimodals_all
   BraTS:
     checkpoint: TFMUNETR_multimodals
 
@@ -33,7 +43,7 @@ GCM_loader:
   over_label: False
   over_add: 10
   # use this flag can fix experiment examples, must set train_example.txt, val_example.txt and test_example.txt to root.
-  fix_example: False
+  fix_example: True
   # task: for different task: PM(腹膜转移分类) ; NL_SS(淋巴结同时序（手术）); NL_DS(淋巴结异时序（化疗后）)
   task: PM
   # task: NL_SS
@@ -43,9 +53,9 @@ GCM_loader:
   leapfrog: []
   root: /root/.cache/huggingface/forget/datasets/MeiMRNew/
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ["ADC", 'T2_FS']
+  checkModels: ['ADC','T2_FS']
   # model_scale: [[0, 6000], [0, 4500], [0, 4500]] # 对应模态的最小最大像素值，用于归一化
-  model_scale: [[0, 6000], [0, 4500]] # 对应模态的最小最大像素值，用于归一化
+  model_scale: [[0, 6000],[0, 4500]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
 
 GCNC_loader:
@@ -61,10 +71,10 @@ GCNC_loader:
   over_add: 10
   # leapfrog: some data error can write in this list to remove from dataloader
   # leapfrog: ['0001902261', '0000439538','0002235469','0001308202']
-  leapfrog: []
+  leapfrog: ['H32444']
   root: /root/.cache/huggingface/forget/datasets/GZNC/
   # checkModels: ["T1WI","T1WI+C","T2WI"]
-  checkModels: ["T1WI", "T1WI+C", "T2WI"]
+  checkModels: ["T1", "T1+C", "T2"]
   model_scale: [[0, 6000], [0, 6000], [0, 6000]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
 
@@ -78,7 +88,11 @@ valer:
   dl_score_csv_path: score
 
 visualization:
+  target_layers: hidden_downsample
   heatmap:
-    choose_image: "0002693285"
-    target_layers: hidden_downsample
-    write_path: output_slices
+    GCM:
+      choose_image: "0002693285"
+      write_path: output_slices
+    GCNC:
+      choose_image: "123841"
+      write_path: output_slices

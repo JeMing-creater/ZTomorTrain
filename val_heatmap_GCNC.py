@@ -27,8 +27,8 @@ import torch.nn.functional as F
 from matplotlib import cm
 import matplotlib.pyplot as plt
 from src import utils
-from src.loader import get_dataloader_GCM as get_dataloader
-from src.loader import get_GCM_transforms as get_transforms
+from src.loader import get_dataloader_GCNC as get_dataloader
+from src.loader import get_GCNC_transforms as get_transforms
 from src.utils import (
     Logger,
     write_example,
@@ -48,6 +48,8 @@ from src.eval import (
     accumulate_metrics,
     compute_final_metrics,
 )
+from src.optimizer import LinearWarmupCosineAnnealingLR
+
 
 # from src.model.HWAUNETR_class import HWAUNETR
 # from src.model.SwinUNETR import MultiTaskSwinUNETR
@@ -73,10 +75,12 @@ def load_model(model, accelerator, checkpoint):
     try:
         check_path = f"{os.getcwd()}/model_store/{checkpoint}/best/"
         accelerator.print("load model from %s" % check_path)
+
+        accelerator.load_state(check_path)
         checkpoint = load_model_dict(
             check_path + "pytorch_model.bin",
         )
-        model.load_state_dict(checkpoint)
+        # model.load_state_dict(checkpoint)
         accelerator.print(f"Load checkpoint model successfully!")
     except Exception as e:
         accelerator.print(e)
@@ -91,11 +95,11 @@ def write_heatmap(config, model, accelerator):
     # cam = GradCAM(nn_module=model, target_layers=config.visualization.heatmap.target_layers)
 
     choose_image = (
-        config.GCM_loader.root
+        config.GCNC_loader.root
         + "/"
         + "ALL"
         + "/"
-        + f"{config.visualization.heatmap.GCM.choose_image}"
+        + f"{config.visualization.heatmap.GCNC.choose_image}"
     )
     accelerator.print("valing heatmap for image: ", choose_image)
     images = []
@@ -103,20 +107,26 @@ def write_heatmap(config, model, accelerator):
     image_size = []
     affines = []
     MRI_array_list = []
-    for i in range(len(config.GCM_loader.checkModels)):
+
+    all_models = os.listdir(choose_image + "/")
+
+    # for i in range(len(config.GCNC_loader.checkModels)):
+    for i in range(len(all_models)):
+        check_model = all_models[i]
+
         image_path = (
             choose_image
             + "/"
-            + config.GCM_loader.checkModels[i]
+            + check_model
             + "/"
-            + f"{config.visualization.heatmap.GCM.choose_image}.nii.gz"
+            + f"{config.visualization.heatmap.GCNC.choose_image}.nii.gz"
         )
         label_path = (
             choose_image
             + "/"
-            + config.GCM_loader.checkModels[i]
+            + check_model
             + "/"
-            + f"{config.visualization.heatmap.GCM.choose_image}seg.nii.gz"
+            + f"{config.visualization.heatmap.GCNC.choose_image}seg.nii.gz"
         )
 
         MRI = nibabel.load(image_path)
@@ -225,13 +235,48 @@ def write_heatmap(config, model, accelerator):
 
         plt.colorbar(img_plot, shrink=0.5)  # color bar if need
         # plt.show()
-        ensure_directory_exists(config.visualization.heatmap.GCM.write_path)
+        ensure_directory_exists(config.visualization.heatmap.GCNC.write_path)
         plt.savefig(
-            config.visualization.heatmap.GCM.write_path
+            config.visualization.heatmap.GCNC.write_path
             + "/"
             + f"CAM_demo_test_{count}.png"
         )
         count += 1
+
+
+def warmup_model(
+    model: torch.nn.Module,
+    loss_functions: Dict[str, torch.nn.modules.loss._Loss],
+    train_loader: torch.utils.data.DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler._LRScheduler,
+    accelerator: Accelerator,
+    epoch: int,
+    step: int,
+):
+    # 训练
+    model.train()
+    for i, image_batch in enumerate(train_loader):
+        logits = model(image_batch["image"])
+        total_loss = 0
+        for name in loss_functions:
+            alpth = 1
+            loss = loss_functions[name](logits, image_batch["label"])
+            total_loss += alpth * loss
+
+        accelerator.backward(total_loss)
+        optimizer.step()
+        optimizer.zero_grad()
+        # for name, param in model.named_parameters():
+        #     if param.grad is None:
+        #         print(name)
+        accelerator.print(
+            f"Epoch [{epoch+1}/{config.trainer.num_epochs}][{i + 1}/{len(train_loader)}] Warmup Loss:{total_loss}",
+            flush=True,
+        )
+        step += 1
+    scheduler.step(epoch)
+    return step
 
 
 if __name__ == "__main__":
@@ -242,7 +287,7 @@ if __name__ == "__main__":
     logging_dir = (
         os.getcwd()
         + "/logs/"
-        + config.finetune.GCM.checkpoint
+        + config.finetune.GCNC.checkpoint
         + str(datetime.now())
         .replace(" ", "_")
         .replace("-", "_")
@@ -257,12 +302,47 @@ if __name__ == "__main__":
     accelerator.print(objstr(config))
 
     accelerator.print("load model...")
-    # model = HWAUNETR(in_chans=len(config.GCM_loader.checkModels), fussion = [1,2,4,8], kernel_sizes=[4, 2, 2, 2], depths=[1, 1, 1, 1], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8],
-    #             out_indices=[0, 1, 2, 3])
     model = get_model(config)
 
-    model = load_model(model, accelerator, config.finetune.GCM.checkpoint)
-    model = accelerator.prepare(model)
+    accelerator.print("warm up model...")
+    train_loader, val_loader, test_loader, example = get_dataloader(config)
+    loss_functions = {
+        "focal_loss": monai.losses.FocalLoss(to_onehot_y=False),
+        "dice_loss": monai.losses.DiceLoss(
+            smooth_nr=0, smooth_dr=1e-5, to_onehot_y=False, sigmoid=True
+        ),
+    }
+    optimizer = optim_factory.create_optimizer_v2(
+        model,
+        opt=config.trainer.optimizer,
+        weight_decay=float(config.trainer.weight_decay),
+        lr=float(config.trainer.lr),
+        betas=(config.trainer.betas[0], config.trainer.betas[1]),
+    )
+    scheduler = LinearWarmupCosineAnnealingLR(
+        optimizer,
+        warmup_epochs=config.trainer.warmup,
+        max_epochs=config.trainer.num_epochs,
+    )
+
+    model, optimizer, scheduler, train_loader, val_loader, test_loader = (
+        accelerator.prepare(
+            model, optimizer, scheduler, train_loader, val_loader, test_loader
+        )
+    )
+
+    model = load_model(model, accelerator, config.finetune.GCNC.checkpoint)
+
+    # warmup_model(
+    #     model,
+    #     loss_functions,
+    #     train_loader,
+    #     optimizer,
+    #     scheduler,
+    #     accelerator,
+    #     0,
+    #     0,
+    # )
 
     accelerator.print("write heatmap...")
     write_heatmap(config, model, accelerator)
