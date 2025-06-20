@@ -247,7 +247,9 @@ def train_seg_one_epoch(
         )
 
         # 更新信息
-        loop.set_description(colored(f"Epoch [{epoch+1}", "red") + f"/{config.trainer.num_epochs}]")
+        loop.set_description(
+            colored(f"Epoch [{epoch+1}", "red") + f"/{config.trainer.num_epochs}]"
+        )
         loop.set_postfix(loss=total_loss)
 
         # loss backward.
@@ -396,7 +398,9 @@ def val_one_epoch(
             step=val_step,
         )
         # 更新信息
-        loop.set_description(colored(f"Epoch [{epoch+1}", "green") + f"/{config.trainer.num_epochs}]")
+        loop.set_description(
+            colored(f"Epoch [{epoch+1}", "green") + f"/{config.trainer.num_epochs}]"
+        )
         loop.set_postfix(loss=total_loss)
 
         val_step += 1
@@ -688,7 +692,8 @@ if __name__ == "__main__":
                 )
 
                 accelerator.print(
-                    colored(f"Epoch [{epoch+1}", "red") + f"/{config.trainer.num_epochs}]  Now train PD L1 acc: {train_metric['Train PD_L1/accuracy']}, Now train M acc: {train_metric['Train M/accuracy']}\n"
+                    colored(f"Epoch [{epoch+1}", "red")
+                    + f"/{config.trainer.num_epochs}]  Now train PD L1 acc: {train_metric['Train PD_L1/accuracy']}, Now train M acc: {train_metric['Train M/accuracy']}\n"
                 )
 
                 if config.GCNC_loader.fusion != True:
@@ -720,7 +725,8 @@ if __name__ == "__main__":
                     output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCM.checkpoint}/best"
                 )
             accelerator.print(
-                colored(f"Epoch [{epoch+1}", "green") + f"/{config.trainer.num_epochs}]  Now val PD L1 acc: {val_top}, Now val M acc: {val_metric['Val M/accuracy']}, best test PD L1 acc: {best_val_metric_data}, best test M acc: {test_M}"
+                colored(f"Epoch [{epoch+1}", "green")
+                + f"/{config.trainer.num_epochs}]  Now val PD L1 acc: {val_top}, Now val M acc: {val_metric['Val M/accuracy']}, best test PD L1 acc: {best_val_metric_data}, best test M acc: {test_M}"
             )
         else:
             val_top = val_metric["Seg/mean dice_metric"]
@@ -730,7 +736,8 @@ if __name__ == "__main__":
                 best_eopch = epoch
 
                 accelerator.print(
-                    colored(f"Epoch [{epoch+1}", "red") + f"/{config.trainer.num_epochs}]  Now train Seg dice: {train_metric.get('Train/mean dice_metric')}\n"
+                    colored(f"Epoch [{epoch+1}", "red")
+                    + f"/{config.trainer.num_epochs}]  Now train Seg dice: {train_metric.get('Train/mean dice_metric')}\n"
                 )
 
                 if config.GCNC_loader.fusion != True:
@@ -761,7 +768,8 @@ if __name__ == "__main__":
                 )
 
             accelerator.print(
-                colored(f"Epoch [{epoch+1}", "green") + f"/{config.trainer.num_epochs}]  Now val Seg dice: {val_metric['Val/mean dice_metric']}, best val Seg dice: {best_val_metric_data}, best val Seg hd95: {best_val_metrics['Val Seg/hd95_metric']}, best test Seg dice: {best_test_metric_data}, best test Seg hd95: {test_hd95}\n"
+                colored(f"Epoch [{epoch+1}", "green")
+                + f"/{config.trainer.num_epochs}]  Now val Seg dice: {val_metric['Val/mean dice_metric']}, best val Seg dice: {best_val_metric_data}, best val Seg hd95: {best_val_metrics['Val Seg/hd95_metric']}, best test Seg dice: {best_test_metric_data}, best test Seg hd95: {test_hd95}\n"
             )
 
         # checkpoint
