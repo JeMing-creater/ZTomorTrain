@@ -11,6 +11,7 @@ pyyaml
 opencv-python
 openpyxl
 tqdm
+termcolor
 scikit-learn
 pandas
 matplotlib

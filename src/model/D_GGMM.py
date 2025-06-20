@@ -95,9 +95,7 @@ class DLKModule(nn.Module):
 
         self.proj_1 = nn.Conv3d(dim, dim, 1)
         self.act = nn.GELU()
-        self.spatial_gating_unit = GGM_Block(
-            in_dim=dim, out_dim=dim, num_slices=num_slices, shallow=shallow
-        )
+        self.spatial_gating_unit = DLK(dim)
         self.proj_2 = nn.Conv3d(dim, dim, 1)
 
     def forward(self, x):
@@ -111,7 +109,6 @@ class DLKModule(nn.Module):
 
 
 class DLKBlock(nn.Module):
-
     def __init__(self, dim, num_slices=4, shallow=False, drop_path=0.0):
         super().__init__()
         self.norm_layer = nn.LayerNorm(dim, eps=1e-6)
@@ -363,12 +360,12 @@ class GGM_Block(nn.Module):
         )
 
         self.downsample = Convblock(in_dim * 2, out_dim, shallow=shallow)
-        self.shallow = shallow
-        if self.shallow == True:
-            self.pool = nn.MaxPool1d(kernel_size=8, stride=8)
-            self.up = nn.Conv3d(
-                in_channels=out_dim // 8, out_channels=out_dim, kernel_size=1
-            )
+        # self.shallow = shallow
+        # if self.shallow == True:
+        #     self.pool = nn.MaxPool1d(kernel_size=8, stride=8)
+        #     self.up = nn.Conv3d(
+        #         in_channels=out_dim // 8, out_channels=out_dim, kernel_size=1
+        #     )
 
     def auto_shape(self, N):
         cube_root = round(N ** (1 / 3))
@@ -388,23 +385,23 @@ class GGM_Block(nn.Module):
 
         B, C, H, W, D = x.shape
         # q, k, v = q.unsqueeze(1), k.unsqueeze(1), v.unsqueeze(1)
-        if self.shallow == True:
-            b_s, c_s, n = q.shape  # 记录原始尺寸，让out_a转换成原始尺寸
-            q = self.pool(q)
-            k = self.pool(k)
-            v = self.pool(v)
+        # if self.shallow == True:
+        #     b_s, c_s, n = q.shape  # 记录原始尺寸，让out_a转换成原始尺寸
+        #     q = self.pool(q)
+        #     k = self.pool(k)
+        #     v = self.pool(v)
 
         q, k, v = q.unsqueeze(1), k.unsqueeze(1), v.unsqueeze(1)
         attn = (q.transpose(-2, -1) @ k).softmax(-1)
         out_a = v @ attn.transpose(-2, -1)
 
-        if self.shallow == True:
-            d, h, w = self.auto_shape(n)
-            # out_a = F.interpolate(out_a, size=n, mode="nearest")
-            out_a = out_a.view(B, -1, h, w, d)
-            out_a = self.up(out_a)
-        else:
-            out_a = out_a.view(B, -1, H, W, D)
+        # if self.shallow == True:
+        #     d, h, w = self.auto_shape(n)
+        #     # out_a = F.interpolate(out_a, size=n, mode="nearest")
+        #     out_a = out_a.view(B, -1, h, w, d)
+        #     out_a = self.up(out_a)
+        # else:
+        out_a = out_a.view(B, -1, H, W, D)
 
         x_f = torch.cat([x_0, x_1], dim=1)
 
@@ -433,7 +430,7 @@ class Seg_Decoder(nn.Module):
         self.block2 = GGM_Block(
             in_dim=c2_in_channels,
             out_dim=out_dim,
-            shallow=False,
+            shallow=True,
             num_slices=num_slices_list[1],
         )
         self.block3 = GGM_Block(
@@ -660,6 +657,9 @@ if __name__ == "__main__":
 
     print(CLS_out[0].size())
     print(CLS_out[1].size())
+    print(CLS_out[0])
+    print(CLS_out[1])
+
     print(SEG_out.size())
 
     # benchmark_model(
