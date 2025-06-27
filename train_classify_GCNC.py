@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Dict
 
 import monai
+from regex import F
 import torch
 import yaml
 from tqdm import tqdm
@@ -16,10 +17,12 @@ from accelerate import Accelerator
 from easydict import EasyDict
 from monai.utils import ensure_tuple_rep
 from objprint import objstr
+from termcolor import colored
 from timm.optim import optim_factory
+from accelerate.utils import DistributedDataParallelKwargs
 
 from src import utils
-from src.loader import get_dataloader_GCM as get_dataloader
+from src.loader import get_dataloader_GCNC as get_dataloader
 from src.optimizer import LinearWarmupCosineAnnealingLR
 from src.utils import Logger, write_example, resume_train_state, split_metrics
 from src.eval import (
@@ -40,8 +43,77 @@ from src.eval import (
 from get_model import get_model
 
 
+def freeze_seg_decoder(model):
+    """
+    冻结 Seg_Decoder 模块的所有参数，适配 accelerate 多卡训练
+    """
+    for name, param in model.named_parameters():
+        if "Seg_Decoder" in name:
+            param.requires_grad = False  # 停止梯度更新
+            if param.grad is not None:
+                param.grad.detach_()  # 清理梯度，防止错误同步
+
+    # 强制设置 eval 模式，防止 BN、Dropout 引发 DDP 不一致
+    if hasattr(model, "Seg_Decoder"):
+        model.Seg_Decoder.eval()
+
+
+class BinaryAccuracyMetric:
+    def __init__(self, accelerator: Accelerator):
+        self.accelerator = accelerator
+        self.reset()
+
+    def reset(self):
+        self.total = 0
+        self.correct = 0
+
+    def update(self, preds: torch.Tensor, labels: torch.Tensor):
+        """
+        参数:
+            preds: shape=[B, 1] 或 [B]，已离散化为 0/1 的 long tensor
+            labels: 同上
+        """
+        preds = preds.view(-1).long()
+        labels = labels.view(-1).long()
+
+        assert (
+            preds.shape == labels.shape
+        ), f"preds {preds.shape}, labels {labels.shape}"
+
+        correct = (preds == labels).sum()
+        total = preds.numel()
+
+        self.correct += correct
+        self.total += total
+
+    def compute(self) -> torch.Tensor:
+        """
+        聚合所有卡上的正确数与总数，计算最终准确率。
+        返回: Tensor([accuracy])，位于当前 accelerator.device
+        """
+        correct = self.accelerator.gather_for_metrics(self.correct.unsqueeze(0))
+        total = self.accelerator.gather_for_metrics(
+            torch.tensor(self.total, device=self.correct.device).unsqueeze(0)
+        )
+
+        # gather 后是所有卡上结果拼接
+        correct_sum = correct.sum()
+        total_sum = total.sum()
+
+        if total_sum.item() == 0:
+            return torch.tensor(float("nan"), device=self.accelerator.device).unsqueeze(
+                0
+            )
+
+        acc = (correct_sum.float() / total_sum).unsqueeze(
+            0
+        )  # 保持与 MONAI 类似的 Tensor([acc])
+        return acc
+
+
 def train_one_epoch(
     model: torch.nn.Module,
+    loss_params: Dict[str, torch.nn.Parameter],
     loss_functions: Dict[str, torch.nn.modules.loss._Loss],
     train_loader: torch.utils.data.DataLoader,
     optimizer: torch.optim.Optimizer,
@@ -50,93 +122,177 @@ def train_one_epoch(
     post_trans: monai.transforms.Compose,
     accelerator: Accelerator,
     epoch: int,
-    step: int,
+    train_step: int,
 ):
     # 训练
     model.train()
+    freeze_seg_decoder(model)
     accelerator.print(f"Training...", flush=True)
-    loop = tqdm(enumerate(train_loader), total=len(train_loader))
-    # for i, image_batch in enumerate(train_loader):
-    for i, image_batch in loop:
-        # for i, image_batch in enumerate(train_loader):
-        logits = model(image_batch["image"])
+    # loop = tqdm(enumerate(train_loader), total=len(train_loader))
+    for i, image_batch in enumerate(train_loader):
+        # for i, image_batch in loop:
+        # get model output.
+        CLS_out, _ = model(image_batch["image"])
+        pdl1_y = CLS_out[0]
+        m_y = CLS_out[1]
+        # get label.
+        pdl1_label = image_batch["pdl1_label"]
+        m_label = image_batch["m_label"]
+
+        # get loss.
         total_loss = 0
-        logits_loss = logits
-        labels = image_batch["class_label"]
+        pd_l1_loss_f = 0
+        pd_l1_loss_b = 0
+        m_loss_f = 0
+        m_loss_b = 0
         for name in loss_functions:
-            alpth = 1
-            loss = loss_functions[name](logits_loss, labels.float())
-            accelerator.log({"Train/" + name: float(loss)}, step=step)
-            total_loss += alpth * loss
+            if name == "dice_loss":
+                continue
+            loss1 = loss_functions[name](pdl1_y, pdl1_label.float())
+            loss2 = loss_functions[name](m_y, m_label.float())
 
-        for metric_name in metrics:
-            y_pred = post_trans(logits)
-            y = labels
+            loss = loss_params["pdl1"] * loss1 + loss_params["m"] * loss2
+
+            if name == 'focal_loss':
+                pd_l1_loss_f = loss_params["pdl1"] * loss1
+                m_loss_f = loss_params["m"] * loss2
+            else:
+                pd_l1_loss_b = loss_params["pdl1"] * loss1
+                m_loss_b = loss_params["m"] * loss2
+            accelerator.log({"Train Class/" + name: float(loss)}, step=train_step)
+            total_loss += loss
+
+        # get metric compute.
+        pdl1_y_pred = post_trans(pdl1_y)
+        m_y_pred = post_trans(m_y)
+
+        # PD L1 metrics compute.
+        for metric_name in metrics["PD_L1"]:
             if metric_name == "miou_metric":
-                y_pred = y_pred.unsqueeze(2)
-                y = y.unsqueeze(2)
-            metrics[metric_name](y_pred=y_pred, y=y)
+                pdl1_y_pred = pdl1_y_pred.unsqueeze(2)
+                pdl1_label = pdl1_label.unsqueeze(2)
+            elif metric_name == "dice_metric" or metric_name == "hd95_metric":
+                continue
+            else:
+                pdl1_y_pred = pdl1_y_pred
+                pdl1_label = pdl1_label
+            # metrics["PD_L1"][metric_name](y_pred=pdl1_y_pred, y=pdl1_label)
+            if metric_name != "accuracy":
+                metrics["PD_L1"][metric_name](
+                    y_pred=pdl1_y_pred.long(), y=pdl1_label.long()
+                )
+            else:
+                metrics["PD_L1"][metric_name].update(pdl1_y_pred, pdl1_label)
 
+        # M metrics compute.
+        for metric_name in metrics["M"]:
+            if metric_name == "miou_metric":
+                m_y_pred = m_y_pred.unsqueeze(2)
+                m_label = m_label.unsqueeze(2)
+            elif metric_name == "dice_metric" or metric_name == "hd95_metric":
+                continue
+            else:
+                m_y_pred = m_y_pred
+                m_label = m_label
+            if metric_name != "accuracy":
+                metrics["M"][metric_name](y_pred=m_y_pred.long(), y=m_label.long())
+            else:
+                metrics["M"][metric_name].update(m_y_pred, m_label)
+
+        accelerator.print(
+            f"Epoch [{epoch+1}"
+            + f"/{config.trainer.num_epochs}]"
+            + f" | Total Loss: {total_loss.item():.4f}"
+            + f" | pd_l1_loss_f: {pd_l1_loss_f:.4f}"
+            + f" | pd_l1_loss_b: {pd_l1_loss_b:.4f}"
+            + f" | m_loss_f: {m_loss_f:.4f}" 
+            + f" | m_loss_b: {m_loss_b:.4f}"
+        )
+
+        # loss backward.
         accelerator.backward(total_loss)
         optimizer.step()
         optimizer.zero_grad()
+
+        # # chack which param not be used to training.
         # for name, param in model.named_parameters():
         #     if param.grad is None:
         #         print(name)
+
+        # log writed.
         accelerator.log(
             {
                 "Train/Total Loss": float(total_loss),
             },
-            step=step,
+            step=train_step,
         )
-        # accelerator.print(
-        #     f'Epoch [{epoch+1}/{config.trainer.num_epochs}][{i + 1}/{len(train_loader)}] Training Loss:{total_loss}',
-        #     flush=True
-        #     )
         # 更新信息
-        loop.set_description(f"Epoch [{epoch+1}/{config.trainer.num_epochs}]")
-        loop.set_postfix(loss=total_loss)
-        step += 1
+        # loop.set_description(f"Epoch [{epoch+1}" + f"/{config.trainer.num_epochs}]")
+        # loop.set_postfix(loss=total_loss)
+
+        train_step += 1
+
     scheduler.step(epoch)
 
+    # compute all metric data.
     metric = {}
-    for metric_name in metrics:
-        batch_acc = metrics[metric_name].aggregate()[0].to(accelerator.device)
+    for label_name in metrics:
+        if label_name == "Seg":
+            continue
+        for metric_name in metrics[label_name]:
+            if metric_name == "accuracy":
+                acc = metrics[label_name][metric_name].compute()
+                batch_acc = acc.to(accelerator.device)
+            else:
+                batch_acc = (
+                    metrics[label_name][metric_name]
+                    .aggregate()[0]
+                    .to(accelerator.device)
+                )
 
-        if accelerator.num_processes > 1:
-            batch_acc = accelerator.reduce(batch_acc) / accelerator.num_processes
+            if accelerator.num_processes > 1:
+                batch_acc = accelerator.reduce(batch_acc) / accelerator.num_processes
 
-        # give every single task metric
-        metrics[metric_name].reset()
-        metric.update(
-            {
-                f"Train/{metric_name}": float(batch_acc.mean()),
-            }
-        )
-    for metric_name in metrics:
-        all_data = []
-        for key in metric.keys():
-            if metric_name in key:
-                all_data.append(metric[key])
-        me_data = sum(all_data) / len(all_data)
-        metric.update({f"Train/{metric_name}": float(me_data)})
+            # give every single task metric
+            metrics[label_name][metric_name].reset()
+            metric.update(
+                {
+                    f"Train {label_name}/{metric_name}": float(batch_acc.mean()),
+                }
+            )
+
+    for label_name in metrics:
+        if label_name == "Seg":
+            continue
+        for metric_name in metrics[label_name]:
+            all_data = []
+            for key in metric.keys():
+                if metric_name in key and label_name in key:
+                    all_data.append(metric[key])
+            me_data = sum(all_data) / len(all_data)
+            metric.update({f"Train {label_name}/{metric_name}": float(me_data)})
 
     accelerator.log(metric, step=epoch)
-    return metric, step
+    return metric, train_step
 
 
 @torch.no_grad()
 def val_one_epoch(
     model: torch.nn.Module,
-    inference: monai.inferers.Inferer,
+    loss_params: Dict[str, torch.nn.Parameter],
+    loss_functions: Dict[str, torch.nn.modules.loss._Loss],
     val_loader: torch.utils.data.DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler._LRScheduler,
     metrics: Dict[str, monai.metrics.CumulativeIterationMetric],
-    step: int,
     post_trans: monai.transforms.Compose,
+    post_trans2: monai.transforms.Compose,
     accelerator: Accelerator,
+    epoch: int,
+    val_step: int,
     test: bool = False,
 ):
-    # 验证
+    # 训练
     model.eval()
     if test:
         flag = "Test"
@@ -145,65 +301,143 @@ def val_one_epoch(
         flag = "Val"
         accelerator.print(f"Valing...", flush=True)
     loop = tqdm(enumerate(val_loader), total=len(val_loader))
-    # for i, image_batch in enumerate(val_loader):
+    # for i, image_batch in enumerate(train_loader):
     for i, image_batch in loop:
-        # logits = inference(model, image_batch['image'])
-        logits = model(
-            image_batch["image"]
-        )  # some moedls can not accepted inference, I do not know why.
-        log = ""
+        # get model output.
+        CLS_out, Seg_Out = model(image_batch["image"])
+        pdl1_y = CLS_out[0]
+        m_y = CLS_out[1]
+        # get label.
+        pdl1_label = image_batch["pdl1_label"]
+        m_label = image_batch["m_label"]
+        seg_label = image_batch["label"]
+
+        # get loss.
         total_loss = 0
-
-        logits_loss = logits
-        labels_loss = image_batch["class_label"]
-
         for name in loss_functions:
-            loss = loss_functions[name](logits_loss, labels_loss.float())
-            accelerator.log({f"{flag}/" + name: float(loss)}, step=step)
-            log += f"{name} {float(loss):1.5f} "
+            if name == "dice_loss":
+                loss = loss_functions[name](Seg_Out, seg_label.float())
+            else:
+                loss1 = loss_functions[name](pdl1_y, pdl1_label.float())
+                loss2 = loss_functions[name](m_y, m_label.float())
+                loss = loss_params["pdl1"] * loss1 + loss_params["m"] * loss2
+            accelerator.log({f"{flag} Class/" + name: float(loss)}, step=val_step)
             total_loss += loss
 
+        # get metric compute.
+        pdl1_y_pred = post_trans(pdl1_y)
+        m_y_pred = post_trans(m_y)
+        seg_pred = post_trans(Seg_Out)
+
+        # PD L1 metrics compute.
+        for metric_name in metrics["PD_L1"]:
+            if metric_name == "miou_metric":
+                pdl1_y_pred = pdl1_y_pred.unsqueeze(2)
+                pdl1_label = pdl1_label.unsqueeze(2)
+            elif metric_name == "dice_metric" or metric_name == "hd95_metric":
+                continue
+            else:
+                pdl1_y_pred = pdl1_y_pred
+                pdl1_label = pdl1_label
+            # metrics["PD_L1"][metric_name](y_pred=pdl1_y_pred, y=pdl1_label)
+            if metric_name != "accuracy":
+                metrics["PD_L1"][metric_name](
+                    y_pred=pdl1_y_pred.long(), y=pdl1_label.long()
+                )
+            else:
+                metrics["PD_L1"][metric_name].update(pdl1_y_pred, pdl1_label)
+
+        # M metrics compute.
+        for metric_name in metrics["M"]:
+            if metric_name == "miou_metric":
+                m_y_pred = m_y_pred.unsqueeze(2)
+                m_label = m_label.unsqueeze(2)
+            elif metric_name == "dice_metric" or metric_name == "hd95_metric":
+                continue
+            else:
+                m_y_pred = m_y_pred
+                m_label = m_label
+            if metric_name != "accuracy":
+                metrics["M"][metric_name](y_pred=m_y_pred.long(), y=m_label.long())
+            else:
+                metrics["M"][metric_name].update(m_y_pred, m_label)
+            # print("PD_L1" + metric_name)
+            # print(metrics["PD_L1"][metric_name].aggregate())
+            # print("M" + metric_name)
+            # print(metrics["M"][metric_name].aggregate())
+
+        # Seg metrics compute.
+        for metric_name in metrics["Seg"]:
+            metrics["Seg"][metric_name](y_pred=seg_pred, y=seg_label)
+
+        # log writed.
         accelerator.log(
             {
                 f"{flag}/Total Loss": float(total_loss),
             },
-            step=step,
+            step=val_step,
         )
-
-        for metric_name in metrics:
-            y_pred = post_trans(logits)
-            y = labels_loss
-            if metric_name == "miou_metric":
-                y_pred = y_pred.unsqueeze(2)
-                y = y.unsqueeze(2)
-            metrics[metric_name](y_pred=y_pred, y=y)
-
-        # accelerator.print(
-        #     f'[{i + 1}/{len(val_loader)}] {flag} Validation Loading...',
-        #     flush=True)
-        loop.set_description(f"Epoch [{epoch+1}/{config.trainer.num_epochs}]")
+        # 更新信息
+        loop.set_description(f"Epoch [{epoch+1}" + f"/{config.trainer.num_epochs}]")
         loop.set_postfix(loss=total_loss)
-        step += 1
+
+        val_step += 1
+
+    # compute all metric data.
     metric = {}
+    for label_name in metrics:
+        for metric_name in metrics[label_name]:
+            # if label_name == 'PD_L1':
+            #     metric.update(
+            #         {
+            #             f"{flag} {label_name}/{metric_name}": 0,
+            #         }
+            #     )
+            #     continue
 
-    for metric_name in metrics:
-        # for channel in range(channels):
-        batch_acc = metrics[metric_name].aggregate()[0].to(accelerator.device)
+            if metric_name == "accuracy":
+                acc = metrics[label_name][metric_name].compute()
+                batch_acc = acc.to(accelerator.device)
+            else:
+                batch_acc = (
+                    metrics[label_name][metric_name]
+                    .aggregate()[0]
+                    .to(accelerator.device)
+                )
+            if accelerator.num_processes > 1:
+                batch_acc = accelerator.reduce(batch_acc) / accelerator.num_processes
 
-        if accelerator.num_processes > 1:
-            batch_acc = accelerator.reduce(batch_acc) / accelerator.num_processes
+            # give every single task metric
+            metrics[label_name][metric_name].reset()
+            if label_name == "Seg":
+                metric_dice = {}
+                metric_dice[f"{flag}/mean {metric_name}"] = float(batch_acc.mean())
 
-        # give every single task metric
-        metrics[metric_name].reset()
-        # task_num = channel + 1
-        metric.update(
-            {
-                f"{flag}/{metric_name}": float(batch_acc.mean()),
-            }
-        )
+                for i in range(len(config.GCNC_loader.checkModels)):
+                    metric_dice[f"{flag}/{config.GCNC_loader.checkModels[i]}"] = float(
+                        batch_acc[i]
+                    )
+                metric.update(metric_dice)
+            else:
+                metric.update(
+                    {
+                        f"{flag} {label_name}/{metric_name}": float(batch_acc.mean()),
+                    }
+                )
+
+    for label_name in metrics:
+        if label_name == "Seg":
+            continue
+        for metric_name in metrics[label_name]:
+            all_data = []
+            for key in metric.keys():
+                if metric_name in key and label_name in key:
+                    all_data.append(metric[key])
+            me_data = sum(all_data) / len(all_data)
+            metric.update({f"{flag} {label_name}/{metric_name}": float(me_data)})
 
     accelerator.log(metric, step=epoch)
-    return metric, step
+    return metric, val_step
 
 
 if __name__ == "__main__":
@@ -214,7 +448,7 @@ if __name__ == "__main__":
     logging_dir = (
         os.getcwd()
         + "/logs/"
-        + config.finetune.GCM.checkpoint
+        + config.finetune.GCNC.checkpoint
         + str(datetime.now())
         .replace(" ", "_")
         .replace("-", "_")
@@ -222,7 +456,10 @@ if __name__ == "__main__":
         .replace(".", "_")
     )
     accelerator = Accelerator(
-        cpu=False, log_with=["tensorboard"], project_dir=logging_dir
+        kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)],
+        cpu=False,
+        log_with=["tensorboard"],
+        project_dir=logging_dir,
     )
     Logger(logging_dir if accelerator.is_local_main_process else None)
     accelerator.init_trackers(os.path.split(__file__)[-1].split(".")[0])
@@ -239,11 +476,16 @@ if __name__ == "__main__":
         write_example(example, logging_dir)
 
     inference = monai.inferers.SlidingWindowInferer(
-        roi_size=config.GCM_loader.target_size,
+        roi_size=config.GCNC_loader.target_size,
         overlap=0.5,
         sw_device=accelerator.device,
         device=accelerator.device,
     )
+
+    loss_params = {
+        "pdl1": 1.5,
+        "m": 0.5,
+    }
 
     loss_functions = {
         "focal_loss": monai.losses.FocalLoss(to_onehot_y=False),
@@ -251,25 +493,66 @@ if __name__ == "__main__":
     }
 
     metrics = {
-        "accuracy": monai.metrics.ConfusionMatrixMetric(
-            include_background=False, metric_name="accuracy"
-        ),
-        "f1": monai.metrics.ConfusionMatrixMetric(
-            include_background=False, metric_name="f1 score"
-        ),
-        "specificity": monai.metrics.ConfusionMatrixMetric(
-            include_background=False, metric_name="specificity"
-        ),
-        "recall": monai.metrics.ConfusionMatrixMetric(
-            include_background=False, metric_name="recall"
-        ),
-        "miou_metric": monai.metrics.MeanIoU(include_background=False),
+        "PD_L1": {
+            # "accuracy": monai.metrics.ConfusionMatrixMetric(
+            #     include_background=False, metric_name="accuracy"
+            # ),
+            "accuracy": BinaryAccuracyMetric(accelerator),
+            "f1": monai.metrics.ConfusionMatrixMetric(
+                include_background=False, metric_name="f1 score"
+            ),
+            "specificity": monai.metrics.ConfusionMatrixMetric(
+                include_background=False, metric_name="specificity"
+            ),
+            "recall": monai.metrics.ConfusionMatrixMetric(
+                include_background=False, metric_name="recall"
+            ),
+            "miou_metric": monai.metrics.MeanIoU(include_background=False),
+        },
+        "M": {
+            "accuracy": BinaryAccuracyMetric(accelerator),
+            #     monai.metrics.ConfusionMatrixMetric(
+            #     include_background=False, metric_name="accuracy"
+            # ),
+            "f1": monai.metrics.ConfusionMatrixMetric(
+                include_background=False, metric_name="f1 score"
+            ),
+            "specificity": monai.metrics.ConfusionMatrixMetric(
+                include_background=False, metric_name="specificity"
+            ),
+            "recall": monai.metrics.ConfusionMatrixMetric(
+                include_background=False, metric_name="recall"
+            ),
+            "miou_metric": monai.metrics.MeanIoU(include_background=False),
+        },
+        "Seg": {
+            "dice_metric": monai.metrics.DiceMetric(
+                include_background=True,
+                reduction=monai.utils.MetricReduction.MEAN_BATCH,
+                get_not_nans=True,
+            ),
+            "hd95_metric": monai.metrics.HausdorffDistanceMetric(
+                percentile=95,
+                include_background=True,
+                reduction=monai.utils.MetricReduction.MEAN_BATCH,
+                get_not_nans=True,
+            ),
+        },
     }
 
     post_trans = monai.transforms.Compose(
         [
             monai.transforms.Activations(sigmoid=True),
             monai.transforms.AsDiscrete(threshold=0.5),
+            lambda x: x.long(),
+        ]
+    )
+
+    post_trans2 = monai.transforms.Compose(
+        [
+            monai.transforms.Activations(sigmoid=True),
+            monai.transforms.AsDiscrete(threshold=0.5),
+            lambda x: x.long(),
         ]
     )
 
@@ -299,6 +582,12 @@ if __name__ == "__main__":
 
     starting_epoch = 0
 
+    model, optimizer, scheduler, train_loader, val_loader, test_loader = (
+        accelerator.prepare(
+            model, optimizer, scheduler, train_loader, val_loader, test_loader
+        )
+    )
+
     if config.trainer.resume:
         (
             model,
@@ -312,7 +601,7 @@ if __name__ == "__main__":
             best_test_metrics,
         ) = utils.resume_train_state(
             model,
-            "{}".format(config.finetune.GCM.checkpoint),
+            "{}".format(config.finetune.GCNC.checkpoint),
             optimizer,
             scheduler,
             train_loader,
@@ -321,69 +610,95 @@ if __name__ == "__main__":
         )
         val_step = train_step
 
-    model, optimizer, scheduler, train_loader, val_loader, test_loader = (
-        accelerator.prepare(
-            model, optimizer, scheduler, train_loader, val_loader, test_loader
-        )
-    )
-
     best_accuracy = torch.Tensor([best_accuracy]).to(accelerator.device)
     best_test_accuracy = torch.Tensor([best_test_accuracy]).to(accelerator.device)
 
     for epoch in range(starting_epoch, config.trainer.num_epochs):
         train_metric, train_step = train_one_epoch(
-            model,
-            loss_functions,
-            train_loader,
-            optimizer,
-            scheduler,
-            metrics,
-            post_trans,
-            accelerator,
-            epoch,
-            train_step,
+            model=model,
+            loss_params=loss_params,
+            loss_functions=loss_functions,
+            train_loader=train_loader,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            metrics=metrics,
+            post_trans=post_trans,
+            accelerator=accelerator,
+            epoch=epoch,
+            train_step=train_step,
         )
 
         final_metrics, val_step = val_one_epoch(
-            model, inference, val_loader, metrics, val_step, post_trans, accelerator
+            model=model,
+            loss_params=loss_params,
+            loss_functions=loss_functions,
+            val_loader=val_loader,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            metrics=metrics,
+            post_trans=post_trans,
+            post_trans2=post_trans2,
+            accelerator=accelerator,
+            epoch=epoch,
+            val_step=val_step,
+            test=False,
         )
 
-        val_top = final_metrics["Val/accuracy"]
+        val_top = final_metrics["Val PD_L1/accuracy"]
 
         # 保存模型
         if val_top > best_accuracy:
-            accelerator.save_state(
-                output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCM.checkpoint}/best"
+            accelerator.print(
+                "Save best model..."
             )
-            best_accuracy = final_metrics["Val/accuracy"]
+            accelerator.save_state(
+                output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCNC.checkpoint}/best"
+            )
+            best_accuracy = final_metrics["Val PD_L1/accuracy"]
             best_metrics = final_metrics
             # 记录最优test acc
-            if config.GCM_loader.fusion == False:
+            if config.GCNC_loader.fusion == False:
                 final_metrics, _ = val_one_epoch(
-                    model,
-                    inference,
-                    test_loader,
-                    metrics,
-                    -1,
-                    post_trans,
-                    accelerator,
+                    model=model,
+                    loss_params=loss_params,
+                    loss_functions=loss_functions,
+                    val_loader=test_loader,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    metrics=metrics,
+                    post_trans=post_trans,
+                    accelerator=accelerator,
+                    epoch=epoch,
+                    val_step=val_step,
                     test=True,
                 )
-                best_test_accuracy = final_metrics["Test/accuracy"]
+                best_test_accuracy = final_metrics["Test PD_L1/accuracy"]
                 best_test_metrics = final_metrics
             else:
                 final_metrics = final_metrics
 
-                best_test_accuracy = final_metrics["Val/accuracy"]
+                best_test_accuracy = final_metrics["Val PD_L1/accuracy"]
                 best_test_metrics = final_metrics
 
         accelerator.print(
-            f'Epoch [{epoch+1}/{config.trainer.num_epochs}] now train acc: {train_metric["Train/accuracy"]}, now val acc: {val_top}, best acc: {best_accuracy}, best test acc: {best_test_accuracy}'
+            colored(f"Epoch [{epoch+1}", "red")
+            + f"/{config.trainer.num_epochs}]  Now train PD L1 acc: {train_metric['Train PD_L1/accuracy']}, Now train M acc: {train_metric['Train M/accuracy']}"
         )
+
+        if config.GCNC_loader.fusion != False:
+            accelerator.print(
+                colored(f"Epoch [{epoch+1}", "green")
+                + f"/{config.trainer.num_epochs}]  Now val PD L1 acc: {val_top}, Now val M acc: {final_metrics['Val M/accuracy']}"
+            )
+        else:
+            accelerator.print(
+                colored(f"Epoch [{epoch+1}", "green")
+                + f"/{config.trainer.num_epochs}]  Now test PD L1 acc: {final_metrics['Test PD_L1/accuracy']}, Now test M acc: {final_metrics['Test M/accuracy']}"
+            )
 
         accelerator.print("Cheakpoint...")
         accelerator.save_state(
-            output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCM.checkpoint}/checkpoint"
+            output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCNC.checkpoint}/checkpoint"
         )
         torch.save(
             {
@@ -393,7 +708,7 @@ if __name__ == "__main__":
                 "best_test_accuracy": best_test_accuracy,
                 "best_test_metrics": best_test_metrics,
             },
-            f"{os.getcwd()}/model_store/{config.finetune.GCM.checkpoint}/checkpoint/epoch.pth.tar",
+            f"{os.getcwd()}/model_store/{config.finetune.GCNC.checkpoint}/checkpoint/epoch.pth.tar",
         )
 
     accelerator.print(f"best top1: {best_test_accuracy}")

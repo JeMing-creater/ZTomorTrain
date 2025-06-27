@@ -89,14 +89,61 @@ class DLK(nn.Module):
 
 
 class DLKModule(nn.Module):
-
     def __init__(self, dim, num_slices=4, shallow=True):
         super().__init__()
 
         self.proj_1 = nn.Conv3d(dim, dim, 1)
-        self.act = nn.GELU()
-        self.spatial_gating_unit = DLK(dim)
+        # self.act = nn.GELU()
+        # self.spatial_gating_unit = DLK(dim)
+
+        self.spatial_gating_unit = GGM_Block(
+            in_dim=dim,
+            out_dim=dim,
+            shallow=shallow,
+            num_slices=num_slices,
+        )
+
         self.proj_2 = nn.Conv3d(dim, dim, 1)
+
+    def forward(self, x):
+        shortcut = x.clone()
+        x = self.proj_1(x)
+        # x = self.act(x)
+        x = self.spatial_gating_unit(x)
+        x = self.proj_2(x)
+        x = x + shortcut
+        return x
+
+
+class GGM_Module(nn.Module):
+    def __init__(self, dim, out_dim=0, num_slices=4, shallow=True):
+        super().__init__()
+
+        self.proj_1 = nn.Conv3d(dim, dim, 1)
+        self.act = nn.GELU()
+        # self.spatial_gating_unit = DLK(dim)
+
+        if out_dim != 0:
+            self.spatial_gating_unit = GGM_Block(
+                in_dim=dim,
+                out_dim=out_dim,
+                shallow=shallow,
+                num_slices=num_slices,
+            )
+            dim = out_dim
+        else:
+            self.spatial_gating_unit = GGM_Block(
+                in_dim=dim,
+                out_dim=dim,
+                shallow=shallow,
+                num_slices=num_slices,
+            )
+            dim = dim
+
+        self.proj_2 = nn.Conv3d(dim, dim, 1)
+
+        self.mlp = Mlp(dim, shallow)
+        self.out_dim = out_dim
 
     def forward(self, x):
         shortcut = x.clone()
@@ -104,7 +151,9 @@ class DLKModule(nn.Module):
         x = self.act(x)
         x = self.spatial_gating_unit(x)
         x = self.proj_2(x)
-        x = x + shortcut
+        if self.out_dim == 0:
+            x = x + shortcut
+        x = self.mlp(x)
         return x
 
 
@@ -158,18 +207,17 @@ class Encoder(nn.Module):
         dp_rates = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]
         cur = 0
         for i in range(4):
-            if i >= 2:
-                shallow = False
-            else:
-                shallow = True
             stage = nn.Sequential(
                 *[
-                    DLKBlock(
-                        dim=dims[i],
-                        num_slices=num_slices_list[i],
-                        drop_path=dp_rates[cur + j],
-                        shallow=shallow,
-                    )
+                    # DLKBlock(
+                    #     dim=dims[i],
+                    #     num_slices=num_slices_list[i],
+                    #     drop_path=dp_rates[cur + j],
+                    #     shallow=shallow,
+                    # )
+                    GGM_Module(dim=dims[i], 
+                               num_slices=num_slices_list[i], 
+                               shallow=(True if i<=1 else False))
                     for j in range(depths[i])
                 ]
             )
@@ -360,12 +408,12 @@ class GGM_Block(nn.Module):
         )
 
         self.downsample = Convblock(in_dim * 2, out_dim, shallow=shallow)
-        # self.shallow = shallow
-        # if self.shallow == True:
-        #     self.pool = nn.MaxPool1d(kernel_size=8, stride=8)
-        #     self.up = nn.Conv3d(
-        #         in_channels=out_dim // 8, out_channels=out_dim, kernel_size=1
-        #     )
+        self.shallow = shallow
+        if self.shallow == True:
+            self.pool = nn.MaxPool1d(kernel_size=8, stride=8)
+            self.up = nn.Conv3d(
+                in_channels=out_dim // 8, out_channels=out_dim, kernel_size=1
+            )
 
     def auto_shape(self, N):
         cube_root = round(N ** (1 / 3))
@@ -385,23 +433,23 @@ class GGM_Block(nn.Module):
 
         B, C, H, W, D = x.shape
         # q, k, v = q.unsqueeze(1), k.unsqueeze(1), v.unsqueeze(1)
-        # if self.shallow == True:
-        #     b_s, c_s, n = q.shape  # 记录原始尺寸，让out_a转换成原始尺寸
-        #     q = self.pool(q)
-        #     k = self.pool(k)
-        #     v = self.pool(v)
+        if self.shallow == True:
+            b_s, c_s, n = q.shape  # 记录原始尺寸，让out_a转换成原始尺寸
+            q = self.pool(q)
+            k = self.pool(k)
+            v = self.pool(v)
 
         q, k, v = q.unsqueeze(1), k.unsqueeze(1), v.unsqueeze(1)
         attn = (q.transpose(-2, -1) @ k).softmax(-1)
         out_a = v @ attn.transpose(-2, -1)
 
-        # if self.shallow == True:
-        #     d, h, w = self.auto_shape(n)
-        #     # out_a = F.interpolate(out_a, size=n, mode="nearest")
-        #     out_a = out_a.view(B, -1, h, w, d)
-        #     out_a = self.up(out_a)
-        # else:
-        out_a = out_a.view(B, -1, H, W, D)
+        if self.shallow == True:
+            d, h, w = self.auto_shape(n)
+            # out_a = F.interpolate(out_a, size=n, mode="nearest")
+            out_a = out_a.view(B, -1, h, w, d)
+            out_a = self.up(out_a)
+        else:
+            out_a = out_a.view(B, -1, H, W, D)
 
         x_f = torch.cat([x_0, x_1], dim=1)
 
@@ -427,23 +475,42 @@ class Seg_Decoder(nn.Module):
             dims[3],
         )
 
-        self.block2 = GGM_Block(
-            in_dim=c2_in_channels,
+        # self.block2 = GGM_Block(
+        #     in_dim=c2_in_channels,
+        #     out_dim=out_dim,
+        #     shallow=False,
+        #     # shallow=True,
+        #     num_slices=num_slices_list[1],
+        # )
+        self.block2 = GGM_Module(
+            dim=c2_in_channels,
             out_dim=out_dim,
-            shallow=True,
             num_slices=num_slices_list[1],
-        )
-        self.block3 = GGM_Block(
-            in_dim=c3_in_channels,
-            out_dim=out_dim,
             shallow=False,
+        )
+        # self.block3 = GGM_Block(
+        #     in_dim=c3_in_channels,
+        #     out_dim=out_dim,
+        #     shallow=False,
+        #     num_slices=num_slices_list[2],
+        # )
+        self.block3 = GGM_Module(
+            dim=c3_in_channels,
+            out_dim=out_dim,
             num_slices=num_slices_list[2],
-        )
-        self.block4 = GGM_Block(
-            in_dim=c4_in_channels,
-            out_dim=out_dim,
             shallow=False,
+        )
+        # self.block4 = GGM_Block(
+        #     in_dim=c4_in_channels,
+        #     out_dim=out_dim,
+        #     shallow=False,
+        #     num_slices=num_slices_list[3],
+        # )
+        self.block4 = GGM_Module(
+            dim=c4_in_channels,
+            out_dim=out_dim,
             num_slices=num_slices_list[3],
+            shallow=False,
         )
 
         self.fuse = Convblock(out_dim, out_dim, shallow=True)

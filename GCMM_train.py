@@ -492,7 +492,7 @@ if __name__ == "__main__":
 
     loss_params = {
         "pdl1": 1.0,
-        "m": 1.0,
+        "m": 0.0,
     }
 
     loss_functions = {
@@ -595,6 +595,8 @@ if __name__ == "__main__":
 
     best_test_metric_data = torch.tensor(0)
     best_test_metrics = {}
+    
+    test_M = 0
 
     starting_epoch = 0
 

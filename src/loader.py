@@ -625,19 +625,26 @@ class MultiModalityDataset(monai.data.Dataset):
 
         if self.use_class == True:
             if self.data_choose == "GCM":
+                class_label = item["class_label"]
+                if class_label != 0:
+                    class_label = 1
                 return {
                     "image": result["image"],
                     "label": result["label"],
-                    "class_label": torch.tensor(item["class_label"])
-                    .unsqueeze(0)
-                    .long(),
+                    "class_label": torch.tensor(class_label).unsqueeze(0).long(),
                 }
             else:
+                pdl1_label = item["pdl1_label"]
+                if pdl1_label != 0:
+                    pdl1_label = 1
+                m_label = item["m_label"]
+                if m_label != 0:
+                    m_label = 1
                 return {
                     "image": result["image"],
                     "label": result["label"],
-                    "pdl1_label": torch.tensor(item["pdl1_label"]).unsqueeze(0).long(),
-                    "m_label": torch.tensor(item["m_label"]).unsqueeze(0).long(),
+                    "pdl1_label": torch.tensor(pdl1_label).unsqueeze(0).long(),
+                    "m_label": torch.tensor(m_label).unsqueeze(0).long(),
                 }
         else:
             return {"image": result["image"], "label": result["label"]}
@@ -900,11 +907,8 @@ def get_dataloader_GCNC(
         (
             train_data,
             val_data,
-            test_data,
-            train_data_lack,
-            val_data_lack,
-            test_data_lack,
-        ) = split_examples_to_data(data, config, lack_flag=True, loding=True)
+            test_data
+        ) = split_examples_to_data(data, config, lack_flag=False, loding=True)
     else:
         random.shuffle(data)
         print("Random Loading!")
@@ -916,23 +920,11 @@ def get_dataloader_GCNC(
                 config.GCNC_loader.test_ratio,
             ],
         )
-        train_data_lack, val_data_lack, test_data_lack = split_list(
-            data_lack,
-            [
-                config.GCNC_loader.train_ratio,
-                config.GCNC_loader.val_ratio,
-                config.GCNC_loader.test_ratio,
-            ],
-        )
 
         if config.GCNC_loader.fusion == True:
             need_val_data = val_data + test_data
             val_data = need_val_data
             test_data = need_val_data
-
-            need_val_data = val_data_lack + test_data_lack
-            val_data_lack = need_val_data
-            test_data_lack = need_val_data
 
     train_example = check_example(train_data)
     val_example = check_example(val_data)
@@ -970,15 +962,6 @@ def get_dataloader_GCNC(
         data_choose="GCNC",
     )
 
-    # train_lack_dataset = MultiModalityDataset(data=train_data_lack, over_label=config.GCNC_loader.over_label, over_add = config.GCNC_loader.over_add,loadforms = load_transform,
-    #                                      transforms=train_transform)
-    # val_lack_dataset   = MultiModalityDataset(data=val_data_lack, over_label=config.GCNC_loader.over_label, over_add = config.GCNC_loader.over_add,
-    #                                      loadforms = load_transform,
-    #                                      transforms=val_transform)
-    # test_lack_dataset   = MultiModalityDataset(data=test_data_lack, over_label=config.GCNC_loader.over_label, over_add = config.GCNC_loader.over_add,
-    #                                      loadforms = load_transform,
-    #                                      transforms=val_transform)
-
     train_loader = monai.data.DataLoader(
         train_dataset,
         num_workers=config.GCNC_loader.num_workers,
@@ -998,13 +981,7 @@ def get_dataloader_GCNC(
         shuffle=False,
     )
 
-    # train_lack_loader = monai.data.DataLoader(train_lack_dataset, num_workers=config.GCNC_loader.num_workers,
-    #                                      batch_size=config.trainer.batch_size, shuffle=True)
-    # val_lack_loader = monai.data.DataLoader(val_lack_dataset, num_workers=config.GCNC_loader.num_workers,
-    #                                    batch_size=config.trainer.batch_size, shuffle=False)
-    # test_lack_loader = monai.data.DataLoader(test_lack_dataset, num_workers=config.GCNC_loader.num_workers,
-    #                                    batch_size=config.trainer.batch_size, shuffle=False)
-
+    
     return (
         train_loader,
         val_loader,
@@ -1055,32 +1032,55 @@ if __name__ == "__main__":
     # train_loader, val_loader, test_loader, _ = get_dataloader_GCM(config)
     train_loader, val_loader, test_loader, _ = get_dataloader_GCNC(config)
 
+    # for i, batch in enumerate(train_loader):
+    #     try:
+    #         # print(batch["image"].shape)
+    #         # print(batch["label"].shape)
+    #         # print(batch["pdl1_label"].shape)
+    #         print(batch["m_label"])
+    #         print(batch["m_label"].shape)
+    #     except Exception as e:
+    #         print(f"Error occurred while loading batch {i}: {e}")
+    #         continue
+
+    conut = 0
+    f_count = 0
+
+    pd_l1_count = 0
+    pd_l1_f_count = 0
+
     for i, batch in enumerate(train_loader):
         try:
-            print(batch["image"].shape)
-            print(batch["label"].shape)
-            print(batch["pdl1_label"].shape)
-            print(batch["m_label"].shape)
-        except Exception as e:
-            print(f"Error occurred while loading batch {i}: {e}")
-            continue
+            # print(batch["image"].shape)
+            # print(batch["label"].shape)
+            print("pdl1_label: ")
+            print(batch["pdl1_label"])
+            if 1 in batch["pdl1_label"]:
+                pd_l1_count += 1
+            else:
+                pd_l1_f_count += 1
 
-    for i, batch in enumerate(val_loader):
-        try:
-            print(batch["image"].shape)
-            print(batch["label"].shape)
-            print(batch["pdl1_label"].shape)
-            print(batch["m_label"].shape)
+            print("m_label: ")
+            print(batch["m_label"])
+            if 1 in batch["m_label"]:
+                conut += 1
+            else:
+                f_count += 1
         except Exception as e:
             print(f"Error occurred while loading batch {i}: {e}")
             continue
+    print(pd_l1_count)
+    print(pd_l1_f_count)
 
-    for i, batch in enumerate(test_loader):
-        try:
-            print(batch["image"].shape)
-            print(batch["label"].shape)
-            print(batch["pdl1_label"].shape)
-            print(batch["m_label"].shape)
-        except Exception as e:
-            print(f"Error occurred while loading batch {i}: {e}")
-            continue
+    print(conut)
+    print(f_count)
+
+    # for i, batch in enumerate(test_loader):
+    #     try:
+    #         # print(batch["image"].shape)
+    #         # print(batch["label"].shape)
+    #         # print(batch["pdl1_label"].shape)
+    #         print(batch["m_label"].shape)
+    #     except Exception as e:
+    #         print(f"Error occurred while loading batch {i}: {e}")
+    #         continue
