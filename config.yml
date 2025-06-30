@@ -1,5 +1,5 @@
 trainer:
-  choose_model: D_GGMM   # [D_GGMM, D_GGM, FMUNETR_class, FMUNETR_seg, ResNet, Vit, TP_Mamba]
+  choose_model: D_GGMM   # [D_GGMM, FMUNETR_class, FMUNETR_seg, ResNet, Vit, TP_Mamba]
   choose_dataset: GCNC   # [GCM, GCNC, BraTS]
   num_epochs: 300
   seg_epochs: 300
@@ -27,7 +27,7 @@ finetune:
   GCNC:
     # checkpoint: TFMUNETR_multimodals_T1WI_T1WI_C
     # checkpoint: TFMUNETR_multimodals_all
-    checkpoint: D_GGMM_multimodals_all_v2
+    checkpoint: D_GGMM_class_multimodals_v3
   BraTS:
     checkpoint: TFMUNETR_multimodals
 
@@ -88,7 +88,15 @@ valer:
   dl_score_csv_path: score
 
 visualization:
+  for_single: True
   target_layers: hidden_downsample
+  visual:
+    GCM:
+      choose_image: "0002693285"
+      write_path: output_seg
+    GCNC:
+      choose_image: "123841"
+      write_path: output_seg
   heatmap:
     GCM:
       choose_image: "0002693285"
