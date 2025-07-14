@@ -5,6 +5,7 @@ score
 SegMamba
 __pycache__
 model_store
+output_seg
 output_slices
 src/__pycache__
 src/model/__pycache__

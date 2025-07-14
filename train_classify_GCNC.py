@@ -17,9 +17,10 @@ from easydict import EasyDict
 from monai.utils import ensure_tuple_rep
 from objprint import objstr
 from timm.optim import optim_factory
+from accelerate.utils import DistributedDataParallelKwargs
 
 from src import utils
-from src.loader import get_dataloader_GCM as get_dataloader
+from src.loader import get_dataloader_GCNC as get_dataloader
 from src.optimizer import LinearWarmupCosineAnnealingLR
 from src.utils import Logger, write_example, resume_train_state, split_metrics
 from src.eval import (
@@ -40,6 +41,21 @@ from src.eval import (
 from get_model import get_model
 
 
+def freeze_seg_decoder(model):
+    """
+    冻结 Seg_Decoder 模块的所有参数，适配 accelerate 多卡训练
+    """
+    for name, param in model.named_parameters():
+        if "Seg_Decoder" in name:
+            param.requires_grad = False  # 停止梯度更新
+            if param.grad is not None:
+                param.grad.detach_()  # 清理梯度，防止错误同步
+
+    # 强制设置 eval 模式，防止 BN、Dropout 引发 DDP 不一致
+    if hasattr(model, "Seg_Decoder"):
+        model.Seg_Decoder.eval()
+
+
 def train_one_epoch(
     model: torch.nn.Module,
     loss_functions: Dict[str, torch.nn.modules.loss._Loss],
@@ -51,18 +67,23 @@ def train_one_epoch(
     accelerator: Accelerator,
     epoch: int,
     step: int,
+    config: EasyDict,
 ):
     # 训练
     model.train()
+    freeze_seg_decoder(model)
     accelerator.print(f"Training...", flush=True)
     loop = tqdm(enumerate(train_loader), total=len(train_loader))
     # for i, image_batch in enumerate(train_loader):
     for i, image_batch in loop:
         # for i, image_batch in enumerate(train_loader):
-        logits = model(image_batch["image"])
+        if config.trainer.choose_model == 'D_GGMM':
+            logits, _ = model(image_batch["image"])
+        else:
+            logits = model(image_batch["image"])
         total_loss = 0
         logits_loss = logits
-        labels = image_batch["class_label"]
+        labels = image_batch["m_label"]
         for name in loss_functions:
             alpth = 1
             loss = loss_functions[name](logits_loss, labels.float())
@@ -134,6 +155,7 @@ def val_one_epoch(
     step: int,
     post_trans: monai.transforms.Compose,
     accelerator: Accelerator,
+    config: EasyDict,
     test: bool = False,
 ):
     # 验证
@@ -148,14 +170,15 @@ def val_one_epoch(
     # for i, image_batch in enumerate(val_loader):
     for i, image_batch in loop:
         # logits = inference(model, image_batch['image'])
-        logits = model(
-            image_batch["image"]
-        )  # some moedls can not accepted inference, I do not know why.
+        if config.trainer.choose_model == "D_GGMM":
+            logits, _ = model(image_batch["image"])
+        else:
+            logits = model(image_batch["image"])
         log = ""
         total_loss = 0
 
         logits_loss = logits
-        labels_loss = image_batch["class_label"]
+        labels_loss = image_batch["m_label"]
 
         for name in loss_functions:
             loss = loss_functions[name](logits_loss, labels_loss.float())
@@ -214,7 +237,7 @@ if __name__ == "__main__":
     logging_dir = (
         os.getcwd()
         + "/logs/"
-        + config.finetune.GCM.checkpoint
+        + config.finetune.GCNC.checkpoint
         + str(datetime.now())
         .replace(" ", "_")
         .replace("-", "_")
@@ -222,7 +245,10 @@ if __name__ == "__main__":
         .replace(".", "_")
     )
     accelerator = Accelerator(
-        cpu=False, log_with=["tensorboard"], project_dir=logging_dir
+        kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)],
+        cpu=False,
+        log_with=["tensorboard"],
+        project_dir=logging_dir,
     )
     Logger(logging_dir if accelerator.is_local_main_process else None)
     accelerator.init_trackers(os.path.split(__file__)[-1].split(".")[0])
@@ -239,7 +265,7 @@ if __name__ == "__main__":
         write_example(example, logging_dir)
 
     inference = monai.inferers.SlidingWindowInferer(
-        roi_size=config.GCM_loader.target_size,
+        roi_size=config.GCNC_loader.target_size,
         overlap=0.5,
         sw_device=accelerator.device,
         device=accelerator.device,
@@ -312,7 +338,7 @@ if __name__ == "__main__":
             best_test_metrics,
         ) = utils.resume_train_state(
             model,
-            "{}".format(config.finetune.GCM.checkpoint),
+            "{}".format(config.finetune.GCNC.checkpoint),
             optimizer,
             scheduler,
             train_loader,
@@ -342,10 +368,19 @@ if __name__ == "__main__":
             accelerator,
             epoch,
             train_step,
+            config,
         )
 
         final_metrics, val_step = val_one_epoch(
-            model, inference, val_loader, metrics, val_step, post_trans, accelerator
+            model,
+            inference,
+            val_loader,
+            metrics,
+            val_step,
+            post_trans,
+            accelerator,
+            config,
+            False
         )
 
         val_top = final_metrics["Val/accuracy"]
@@ -353,12 +388,12 @@ if __name__ == "__main__":
         # 保存模型
         if val_top > best_accuracy:
             accelerator.save_state(
-                output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCM.checkpoint}/best"
+                output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCNC.checkpoint}/best"
             )
             best_accuracy = final_metrics["Val/accuracy"]
             best_metrics = final_metrics
             # 记录最优test acc
-            if config.GCM_loader.fusion == False:
+            if config.GCNC_loader.fusion == False:
                 final_metrics, _ = val_one_epoch(
                     model,
                     inference,
@@ -367,6 +402,7 @@ if __name__ == "__main__":
                     -1,
                     post_trans,
                     accelerator,
+                    config,
                     test=True,
                 )
                 best_test_accuracy = final_metrics["Test/accuracy"]
@@ -383,7 +419,7 @@ if __name__ == "__main__":
 
         accelerator.print("Cheakpoint...")
         accelerator.save_state(
-            output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCM.checkpoint}/checkpoint"
+            output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCNC.checkpoint}/checkpoint"
         )
         torch.save(
             {
@@ -393,8 +429,8 @@ if __name__ == "__main__":
                 "best_test_accuracy": best_test_accuracy,
                 "best_test_metrics": best_test_metrics,
             },
-            f"{os.getcwd()}/model_store/{config.finetune.GCM.checkpoint}/checkpoint/epoch.pth.tar",
+            f"{os.getcwd()}/model_store/{config.finetune.GCNC.checkpoint}/checkpoint/epoch.pth.tar",
         )
 
-    accelerator.print(f"best top1: {best_test_accuracy}")
+    accelerator.print(f"best test accuracy: {best_test_accuracy}")
     accelerator.print(f"best metrics: {best_test_metrics}")

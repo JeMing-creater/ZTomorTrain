@@ -80,10 +80,12 @@ def load_model_dict(download_path, save_path=None, check_hash=True) -> OrderedDi
             download_path,
             model_dir=save_path,
             check_hash=check_hash,
-            map_location=torch.device("cpu"),
+            map_location=torch.device("cpu")
         )
     else:
-        state_dict = torch.load(download_path, map_location=torch.device("cpu"))
+        state_dict = torch.load(
+            download_path, map_location=torch.device("cpu")
+        )
     return state_dict
 
 
