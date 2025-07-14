@@ -435,11 +435,8 @@ class TransposedConvLayer(nn.Module):
             dim_out * 2, dim_out, kernel_size=1, stride=1
         )
 
-    def forward(self, x, feature):
+    def forward(self, x):
         x = self.transposed1(x)
-        x = torch.cat((x, feature), dim=1)
-        # x = self.Atten(x)
-        x = self.transposed2(x)
         x = self.norm(x)
         return x
 
@@ -447,36 +444,67 @@ class TransposedConvLayer(nn.Module):
 class Seg_Decoder(nn.Module):
     def __init__(
         self,
-        out_channels = 3,
+        out_channels=3,
         hidden_size=768,
         dims=[48, 96, 192, 384],
         heads=[1, 2, 4, 4],
         kernel_sizes=[4, 2, 2, 2],
+        num_slices_list=[64, 32, 16, 8],
     ):
         super().__init__()
-        self.TSconv1 = TransposedConvLayer(
-            dim_in=hidden_size, dim_out=dims[3], head=heads[3], r=2
-        )
 
-        self.TSconv2 = TransposedConvLayer(
+        self.fu1 = TransposedConvLayer(
             dim_in=dims[3], dim_out=dims[2], head=heads[2], r=kernel_sizes[3]
         )
-        self.TSconv3 = TransposedConvLayer(
-            dim_in=dims[2], dim_out=dims[1], head=heads[1], r=kernel_sizes[2]
+        self.block1 = GGM_Module(
+            dim=dims[2] * 2,
+            out_dim=dims[2],
+            num_slices=num_slices_list[2],
+            shallow=False,
         )
-        self.TSconv4 = TransposedConvLayer(
+        self.ups = TransposedConvLayer(
+            dim_in=dims[2], dim_out=dims[0], head=heads[1], r=kernel_sizes[2] * 2
+        )
+
+        self.fu2 = TransposedConvLayer(
             dim_in=dims[1], dim_out=dims[0], head=heads[0], r=kernel_sizes[1]
         )
 
+        self.block2 = GGM_Module(
+            dim=dims[0] * 2,
+            out_dim=dims[0],
+            num_slices=num_slices_list[0],
+            shallow=True,
+        )
+
+        self.block3 = GGM_Module(
+            dim=dims[0] * 2,
+            out_dim=dims[0],
+            num_slices=num_slices_list[0],
+            shallow=True,
+        )
+
         self.SegHead = nn.ConvTranspose3d(
-            dims[0], out_channels, kernel_size=kernel_sizes[0], stride=kernel_sizes[0]
+            dims[0],
+            out_channels,
+            kernel_size=kernel_sizes[0],
+            stride=kernel_sizes[0],
         )
 
     def forward(self, deep_feature, feature_out):
-        x = self.TSconv1(deep_feature, feature_out[-1])
-        x = self.TSconv2(x, feature_out[-2])
-        x = self.TSconv3(x, feature_out[-3])
-        x = self.TSconv4(x, feature_out[-4])
+        c1, c2, c3, c4 = feature_out
+
+        c4 = self.fu1(c4)
+        fuse_1 = torch.cat([c3, c4], dim=1)
+        fuse_1 = self.block1(fuse_1)
+        fuse_1 = self.ups(fuse_1)
+
+        c2 = self.fu2(c2)
+        fuse_2 = torch.cat([c2, c1], dim=1)
+        fuse_2 = self.block2(fuse_2)
+        x = torch.cat([fuse_1, fuse_2], dim=1)
+
+        x = self.block3(x)
         x = self.SegHead(x)
         return x
 
@@ -585,7 +613,7 @@ class D_GGMM(nn.Module):
         self.num_tasks = num_tasks
 
         self.seg_decoder = Seg_Decoder(
-            out_channels = out_channels,
+            out_channels=out_channels,
             hidden_size=hidden_size,
             dims=dims,
             heads=heads,

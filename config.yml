@@ -25,9 +25,8 @@ finetune:
     checkpoint: Vit
     # checkpoint: FMUNETR_class
   GCNC:
-    # checkpoint: TFMUNETR_multimodals_T1WI_T1WI_C
-    # checkpoint: TFMUNETR_multimodals_all
-    checkpoint: D_GGMM_class_multimodals_v3
+    # checkpoint: D_GGMM_class_multimodals_v3
+    checkpoint: D_GGMM_class_multimodals_v5
   BraTS:
     checkpoint: TFMUNETR_multimodals
 

@@ -67,6 +67,7 @@ def train_one_epoch(
     accelerator: Accelerator,
     epoch: int,
     step: int,
+    config: EasyDict,
 ):
     # 训练
     model.train()
@@ -154,6 +155,7 @@ def val_one_epoch(
     step: int,
     post_trans: monai.transforms.Compose,
     accelerator: Accelerator,
+    config: EasyDict,
     test: bool = False,
 ):
     # 验证
@@ -366,10 +368,19 @@ if __name__ == "__main__":
             accelerator,
             epoch,
             train_step,
+            config,
         )
 
         final_metrics, val_step = val_one_epoch(
-            model, inference, val_loader, metrics, val_step, post_trans, accelerator
+            model,
+            inference,
+            val_loader,
+            metrics,
+            val_step,
+            post_trans,
+            accelerator,
+            config,
+            False
         )
 
         val_top = final_metrics["Val/accuracy"]
@@ -391,6 +402,7 @@ if __name__ == "__main__":
                     -1,
                     post_trans,
                     accelerator,
+                    config,
                     test=True,
                 )
                 best_test_accuracy = final_metrics["Test/accuracy"]
