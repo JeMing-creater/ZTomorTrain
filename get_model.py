@@ -4,8 +4,8 @@ from src.model.HWAUNETR_seg import HWAUNETR as FMUNETR_seg
 from src.model.ResNet import resnet50
 from src.model.Vit import Vit as Vit
 from src.model.TP_Mamba import SAM_MS
-from src.model.D_GGM import D_GGM
 from src.model.DGMS import D_GGMM as D_GGMM
+from src.model.HSL_Net import HSL_Net
 
 
 def get_model(config):
@@ -82,7 +82,25 @@ def get_model(config):
             num_slices_list=[64, 32, 16, 8],
             drop_path_rate=0.3,
         )
-
+    elif "HSL_Net" in config.trainer.choose_model:
+        if config.trainer.choose_dataset == "GCM":
+            use_config = config.GCM_loader
+        elif config.trainer.choose_dataset == "GCNC":
+            use_config = config.GCNC_loader
+        model = HSL_Net(
+            in_channels=len(use_config.checkModels),
+            out_channels=len(use_config.checkModels),
+            num_tasks=1,
+            hidden_size=768,
+            depths=[2, 2, 2, 2],
+            kernel_sizes=[4, 2, 2, 2],
+            dims=[48, 96, 192, 384],
+            out_dim=64,
+            heads=[1, 2, 4, 4],
+            out_indices=[0, 1, 2, 3],
+            num_slices_list=[64, 32, 16, 8],
+        )
+        print("HSL_Net")
     elif config.trainer.choose_model == "TP_Mamba":
         model = SAM_MS(
             in_classes=len(config.GCM_loader.checkModels), num_classes=2, dr=16.0

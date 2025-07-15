@@ -56,10 +56,10 @@ def train_one_epoch(
 ):
     # 训练
     model.train()
-    if config.trainer.choose_model == "D_GGMM":
+    if config.trainer.choose_model == "HSL_Net":
         freeze_encoder_class(model)
     for i, image_batch in enumerate(train_loader):
-        if config.trainer.choose_model == "D_GGMM":
+        if config.trainer.choose_model == "HSL_Net":
             _, logits = model(image_batch["image"])
         else:
             logits = model(image_batch["image"])
@@ -127,7 +127,7 @@ def val_one_epoch(
     hd95_acc = 0
     hd95_class = []
     for i, image_batch in enumerate(val_loader):
-        if config.trainer.choose_model == "D_GGMM":
+        if config.trainer.choose_model == "HSL_Net":
             _, logits = model(image_batch["image"])
         else:
             logits = model(image_batch["image"])
@@ -211,8 +211,8 @@ if __name__ == "__main__":
 
     accelerator.print("load model...")
     model = get_model(config)
-    # if config.trainer.choose_model == "D_GGMM":
-    #     check_path = f"{os.getcwd()}/model_store/D_GGMM_class_multimodals_v3/best/"
+    # if config.trainer.choose_model == "HSL_Net":
+    #     check_path = f"{os.getcwd()}/model_store/HSL_Net_class_multimodals_v3/best/"
     #     accelerator.print("load pretrain model from %s" % check_path)
     #     checkpoint = load_model_dict(
     #         check_path + "pytorch_model.bin",

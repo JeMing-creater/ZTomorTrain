@@ -1,10 +1,10 @@
 trainer:
-  choose_model: D_GGMM   # [D_GGMM, FMUNETR_class, FMUNETR_seg, ResNet, Vit, TP_Mamba]
+  choose_model: HSL_Net   # [HSL_Net, D_GGMM, FMUNETR_class, FMUNETR_seg, ResNet, Vit, TP_Mamba]
   choose_dataset: GCNC   # [GCM, GCNC, BraTS]
   num_epochs: 300
   seg_epochs: 300
   warmup: 2
-  batch_size: 2
+  batch_size: 4
   resume: True
   lr: 0.001
   min_lr: 0.0000001
@@ -26,7 +26,7 @@ finetune:
     # checkpoint: FMUNETR_class
   GCNC:
     # checkpoint: D_GGMM_class_multimodals_v3
-    checkpoint: D_GGMM_class_multimodals_v5
+    checkpoint: HSL_Net_class_multimodals
   BraTS:
     checkpoint: TFMUNETR_multimodals
 
