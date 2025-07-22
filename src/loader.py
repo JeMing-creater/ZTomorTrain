@@ -416,6 +416,7 @@ def get_GCNC_transforms(
                         spatial_size=config.GCNC_loader.target_size,
                         mode=("trilinear", "nearest-exact"),
                     ),
+                    Orientationd(keys=["image", "label"], axcodes="RAS"),
                     ScaleIntensityRanged(
                         keys=["image"],  # 对图像应用变换
                         a_min=model_scale[0],  # 输入图像的最小强度值

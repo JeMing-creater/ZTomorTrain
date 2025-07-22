@@ -211,14 +211,14 @@ if __name__ == "__main__":
 
     accelerator.print("load model...")
     model = get_model(config)
-    # if config.trainer.choose_model == "HSL_Net":
-    #     check_path = f"{os.getcwd()}/model_store/HSL_Net_class_multimodals_v3/best/"
-    #     accelerator.print("load pretrain model from %s" % check_path)
-    #     checkpoint = load_model_dict(
-    #         check_path + "pytorch_model.bin",
-    #     )
-    #     model.load_state_dict(checkpoint, strict=False)
-    #     accelerator.print(f"Load checkpoint model successfully!")
+    if config.trainer.choose_model == "HSL_Net":
+        check_path = f"{os.getcwd()}/model_store/HSL_Net_class_multimodals/best/"
+        accelerator.print("load pretrain model from %s" % check_path)
+        checkpoint = load_model_dict(
+            check_path + "pytorch_model.bin",
+        )
+        model.load_state_dict(checkpoint, strict=False)
+        accelerator.print(f"Load checkpoint model successfully!")
 
     accelerator.print("load dataset...")
     train_loader, val_loader, test_loader, example = get_dataloader(config)
