@@ -360,15 +360,6 @@ class Decoder(nn.Module):
         # 添加全局平均池化层
         self.global_avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
         
-        # # 最后一层全连接层用于分类任务
-        # # 为每个任务定义独立的分类头
-        # self.task_heads = nn.ModuleList([
-        #     nn.Sequential(
-        #         nn.Linear(48*2, 64),  # 全连接层
-        #         nn.ReLU(),
-        #         nn.Linear(64, 1)  # 输出层
-        #     ) for _ in range(num_tasks)
-        # ])
         self.task_head = nn.Sequential(
                 nn.Linear(48*2, 64),  # 全连接层
                 nn.ReLU(),

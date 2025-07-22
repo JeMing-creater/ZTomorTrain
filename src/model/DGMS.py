@@ -35,70 +35,51 @@ class Swish(nn.Module):
 
 
 class Mlp(nn.Module):
-    def __init__(self, dim, shallow=False):
+    def __init__(self, hidden_size, mlp_dim, shallow=True):
         super().__init__()
-        drop = 0.0
-        self.fc1 = nn.Conv3d(dim, dim * 4, 1)
-        self.dwconv = nn.Conv3d(dim * 4, dim * 4, 3, 1, 1, bias=True, groups=dim * 4)
+        self.fc1 = nn.Conv3d(hidden_size, mlp_dim, 1)
         if shallow == True:
             self.act = nn.GELU()
         else:
             self.act = Swish()
-        self.fc2 = nn.Conv3d(dim * 4, dim, 1)
-        self.drop = nn.Dropout(drop)
+        # self.act = nn.ReLU()
+        self.fc2 = nn.Conv3d(mlp_dim, hidden_size, 1)
 
     def forward(self, x):
         x = self.fc1(x)
-        x = self.dwconv(x)
         x = self.act(x)
-        x = self.drop(x)
         x = self.fc2(x)
-        x = self.drop(x)
         return x
 
 
-class DLK(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.att_conv1 = nn.Conv3d(
-            dim, dim, kernel_size=5, stride=1, padding=2, groups=dim
-        )
-        self.att_conv2 = nn.Conv3d(
-            dim, dim, kernel_size=7, stride=1, padding=9, groups=dim, dilation=3
-        )
-
-        self.spatial_se = nn.Sequential(
-            nn.Conv3d(in_channels=2, out_channels=2, kernel_size=7, padding=3),
-            nn.Sigmoid(),
-        )
-
-    def forward(self, x):
-        att1 = self.att_conv1(x)
-        att2 = self.att_conv2(att1)
-
-        att = torch.cat([att1, att2], dim=1)
-        avg_att = torch.mean(att, dim=1, keepdim=True)
-        max_att, _ = torch.max(att, dim=1, keepdim=True)
-        att = torch.cat([avg_att, max_att], dim=1)
-        att = self.spatial_se(att)
-        output = att1 * att[:, 0, :, :].unsqueeze(1) + att2 * att[:, 1, :, :].unsqueeze(
-            1
-        )
-        output = output + x
-        return output
-
-
-class DLKModule(nn.Module):
-
-    def __init__(self, dim, num_slices=4, shallow=True):
+class GGM_Module(nn.Module):
+    def __init__(self, dim, out_dim=0, num_slices=4, shallow=True):
         super().__init__()
 
         self.proj_1 = nn.Conv3d(dim, dim, 1)
         self.act = nn.GELU()
-        self.spatial_gating_unit = GGM_Block(
-            in_dim=dim, out_dim=dim, num_slices=num_slices, shallow=shallow
-        )
+
+        if out_dim != 0:
+            self.spatial_gating_unit = GGM_Block(
+                in_dim=dim,
+                out_dim=out_dim,
+                shallow=shallow,
+                num_slices=num_slices,
+            )
+            dim = out_dim
+        else:
+            self.spatial_gating_unit = GGM_Block(
+                in_dim=dim,
+                out_dim=dim,
+                shallow=shallow,
+                num_slices=num_slices,
+            )
+            dim = dim
+
         self.proj_2 = nn.Conv3d(dim, dim, 1)
+
+        self.mlp = Mlp(dim, dim * 2, shallow)
+        self.out_dim = out_dim
 
     def forward(self, x):
         shortcut = x.clone()
@@ -106,99 +87,164 @@ class DLKModule(nn.Module):
         x = self.act(x)
         x = self.spatial_gating_unit(x)
         x = self.proj_2(x)
-        x = x + shortcut
+        if self.out_dim == 0:
+            x = x + shortcut
+        x = self.mlp(x)
         return x
 
 
-class DLKBlock(nn.Module):
-
-    def __init__(self, dim, num_slices=4, shallow=False, drop_path=0.0):
+class GMPBlock(nn.Module):
+    def __init__(self, in_channles, shallow=True) -> None:
         super().__init__()
-        self.norm_layer = nn.LayerNorm(dim, eps=1e-6)
-        self.attn = DLKModule(dim, num_slices=num_slices, shallow=shallow)
-        self.mlp = Mlp(dim, shallow)
-        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
-        layer_scale_init_value = 1e-6
-        self.layer_scale = nn.Parameter(
-            layer_scale_init_value * torch.ones((dim)), requires_grad=True
-        )
+
+        self.proj = nn.Conv3d(in_channles, in_channles, 3, 1, 1)
+        self.norm = nn.InstanceNorm3d(in_channles)
+        if shallow == True:
+            self.nonliner = nn.GELU()
+        else:
+            self.nonliner = Swish()
+        # self.nonliner = nn.ReLU()
+
+        self.proj2 = nn.Conv3d(in_channles, in_channles, 3, 1, 1)
+        self.norm2 = nn.InstanceNorm3d(in_channles)
+        if shallow == True:
+            self.nonliner2 = nn.GELU()
+        else:
+            self.nonliner2 = Swish()
+
+        self.proj3 = nn.Conv3d(in_channles, in_channles, 1, 1, 0)
+        self.norm3 = nn.InstanceNorm3d(in_channles)
+        if shallow == True:
+            self.nonliner3 = nn.GELU()
+        else:
+            self.nonliner3 = Swish()
+
+        self.proj4 = nn.Conv3d(in_channles, in_channles, 1, 1, 0)
+        self.norm4 = nn.InstanceNorm3d(in_channles)
+        if shallow == True:
+            self.nonliner4 = nn.GELU()
+        else:
+            self.nonliner4 = Swish()
 
     def forward(self, x):
-        shortcut = x.clone()
-        x = channel_to_last(x)
-        x = self.norm_layer(x)
-        x = channel_to_first(x)
-        x = self.attn(x)
-        x = shortcut + self.drop_path(
-            self.layer_scale.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * x
-        )
 
-        shortcut = x.clone()
-        x = channel_to_last(x)
-        x = self.norm_layer(x)
-        x = channel_to_first(x)
-        x = self.mlp(x)
-        x = shortcut + self.drop_path(
-            self.layer_scale.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * x
-        )
+        x_residual = x
 
-        return x
+        x1 = self.proj(x)
+        x1 = self.norm(x1)
+        x1 = self.nonliner(x1)
+
+        x1 = self.proj2(x1)
+        x1 = self.norm2(x1)
+        x1 = self.nonliner2(x1)
+
+        x2 = self.proj3(x)
+        x2 = self.norm3(x2)
+        x2 = self.nonliner3(x2)
+
+        x = x1 + x2
+        x = self.proj4(x)
+        x = self.norm4(x)
+        x = self.nonliner4(x)
+
+        return x + x_residual
 
 
 class Encoder(nn.Module):
-    def __init__(self, in_chans, num_slices_list, depths, dims, drop_path_rate):
+    def __init__(
+        self,
+        in_chans=4,
+        kernel_sizes=[4, 2, 2, 2],
+        depths=[1, 1, 1, 1],
+        dims=[48, 96, 192, 384],
+        num_slices_list=[64, 32, 16, 8],
+        hidden_size=768,
+        out_indices=[0, 1, 2, 3],
+        heads=[1, 2, 4, 4],
+    ):
         super().__init__()
+        self.downsample_layers = (
+            nn.ModuleList()
+        )  # stem and 3 intermediate downsampling conv layers
+        self.dims = dims
+        stem = nn.Sequential(
+            nn.Conv3d(
+                in_chans, dims[0], kernel_size=kernel_sizes[0], stride=kernel_sizes[0]
+            ),
+        )
 
-        self.downsample_layers = nn.ModuleList()
-        stem = nn.Conv3d(in_chans, dims[0], kernel_size=7, stride=2, padding=3)
         self.downsample_layers.append(stem)
-
         for i in range(3):
-            downsample_layer = nn.Conv3d(dims[i], dims[i + 1], kernel_size=2, stride=2)
+            downsample_layer = nn.Sequential(
+                nn.InstanceNorm3d(dims[i]),
+                nn.Conv3d(
+                    dims[i],
+                    dims[i + 1],
+                    kernel_size=kernel_sizes[i + 1],
+                    stride=kernel_sizes[i + 1],
+                ),
+            )
             self.downsample_layers.append(downsample_layer)
 
         self.stages = nn.ModuleList()
-        dp_rates = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]
+        self.gscs = nn.ModuleList()
+        self.stages = nn.ModuleList()
+        self.gscs = nn.ModuleList()
         cur = 0
         for i in range(4):
-            if i >= 2:
+            shallow = True
+            if i > 1:
                 shallow = False
-            else:
-                shallow = True
+            gsc = GMPBlock(dims[i], shallow)
+
             stage = nn.Sequential(
                 *[
-                    DLKBlock(
+                    GGM_Module(
                         dim=dims[i],
                         num_slices=num_slices_list[i],
-                        drop_path=dp_rates[cur + j],
-                        shallow=shallow,
+                        shallow=(True if i <= 1 else False),
                     )
                     for j in range(depths[i])
                 ]
             )
+
             self.stages.append(stage)
+
+            self.gscs.append(gsc)
             cur += depths[i]
 
-        self.norm_layers = nn.ModuleList()
-        for i in range(4):
-            norm_layer = nn.LayerNorm(dims[i], eps=1e-6)
-            self.norm_layers.append(norm_layer)
+        self.out_indices = out_indices
 
-    def forward_features(self, x):
-        outs = []
-        for i in range(4):
-            x = self.downsample_layers[i](x)
-            x = channel_to_last(x)
-            x = self.norm_layers[i](x)
-            x = channel_to_first(x)
-            x = self.stages[i](x)
-            outs.append(x)
+        self.hidden_downsample = nn.Conv3d(
+            dims[3], hidden_size, kernel_size=2, stride=2
+        )
 
-        return tuple(outs)
+        self.mlps = nn.ModuleList()
+        for i_layer in range(4):
+            layer = nn.InstanceNorm3d(dims[i_layer])
+            layer_name = f"norm{i_layer}"
+            self.add_module(layer_name, layer)
+            if i_layer >= 2:
+                self.mlps.append(Mlp(dims[i_layer], 2 * dims[i_layer], False))
+            else:
+                self.mlps.append(Mlp(dims[i_layer], 2 * dims[i_layer], True))
 
     def forward(self, x):
-        x = self.forward_features(x)
-        return x
+        # outs = []
+        feature_out = []
+        for i in range(4):
+            x = self.downsample_layers[i](x)
+            x = self.gscs[i](x)
+            # x = self.stages[i](x)
+            feature_out.append(self.stages[i](x))
+            # feature_out.append(x)
+            if i in self.out_indices:
+                norm_layer = getattr(self, f"norm{i}")
+                x = norm_layer(x)
+                x = self.mlps[i](x)
+                # outs.append(x_out)
+        x = self.hidden_downsample(x)
+        return x, feature_out
 
 
 class Convblock(nn.Module):
@@ -223,28 +269,6 @@ class Convblock(nn.Module):
         output = self.conv1(x)
         output = self.conv2(output)
         return output
-
-
-def channel_to_last(x):
-    """
-    Args:
-        x: (B, C, H, W, D)
-
-    Returns:
-        x: (B, H, W, D, C)
-    """
-    return x.permute(0, 2, 3, 4, 1)
-
-
-def channel_to_first(x):
-    """
-    Args:
-        x: (B, H, W, D, C)
-
-    Returns:
-        x: (B, C, H, W, D)
-    """
-    return x.permute(0, 4, 1, 2, 3)
 
 
 class GGM(nn.Module):
@@ -349,26 +373,14 @@ class GGM_Block(nn.Module):
         super(GGM_Block, self).__init__()
         self.in_dim = in_dim
         self.out_dim = out_dim
-        if shallow == True:
-            self.act = nn.GELU()
-        else:
-            self.act = Swish()
 
         self.gobel_attention = GGM(
             in_dim=in_dim // 2, out_dim=out_dim, num_slices=num_slices, goble=True
         )
-
         self.local_attention = GGM(
             in_dim=in_dim // 2, out_dim=out_dim, num_slices=num_slices, goble=False
         )
-
         self.downsample = Convblock(in_dim * 2, out_dim, shallow=shallow)
-        self.shallow = shallow
-        if self.shallow == True:
-            self.pool = nn.MaxPool1d(kernel_size=8, stride=8)
-            self.up = nn.Conv3d(
-                in_channels=out_dim // 8, out_channels=out_dim, kernel_size=1
-            )
 
     def auto_shape(self, N):
         cube_root = round(N ** (1 / 3))
@@ -388,23 +400,23 @@ class GGM_Block(nn.Module):
 
         B, C, H, W, D = x.shape
         # q, k, v = q.unsqueeze(1), k.unsqueeze(1), v.unsqueeze(1)
-        if self.shallow == True:
-            b_s, c_s, n = q.shape  # 记录原始尺寸，让out_a转换成原始尺寸
-            q = self.pool(q)
-            k = self.pool(k)
-            v = self.pool(v)
+        # if self.shallow == True:
+        #     b_s, c_s, n = q.shape  # 记录原始尺寸，让out_a转换成原始尺寸
+        #     q = self.pool(q)
+        #     k = self.pool(k)
+        #     v = self.pool(v)
 
         q, k, v = q.unsqueeze(1), k.unsqueeze(1), v.unsqueeze(1)
         attn = (q.transpose(-2, -1) @ k).softmax(-1)
         out_a = v @ attn.transpose(-2, -1)
 
-        if self.shallow == True:
-            d, h, w = self.auto_shape(n)
-            # out_a = F.interpolate(out_a, size=n, mode="nearest")
-            out_a = out_a.view(B, -1, h, w, d)
-            out_a = self.up(out_a)
-        else:
-            out_a = out_a.view(B, -1, H, W, D)
+        # if self.shallow == True:
+        #     d, h, w = self.auto_shape(n)
+        #     # out_a = F.interpolate(out_a, size=n, mode="nearest")
+        #     out_a = out_a.view(B, -1, h, w, d)
+        #     out_a = self.up(out_a)
+        # else:
+        out_a = out_a.view(B, -1, H, W, D)
 
         x_f = torch.cat([x_0, x_1], dim=1)
 
@@ -414,174 +426,202 @@ class GGM_Block(nn.Module):
         return x
 
 
+class TransposedConvLayer(nn.Module):
+    def __init__(self, dim_in, dim_out, head, r):
+        super(TransposedConvLayer, self).__init__()
+        self.transposed1 = nn.ConvTranspose3d(dim_in, dim_out, kernel_size=r, stride=r)
+        self.norm = nn.GroupNorm(num_groups=1, num_channels=dim_out)
+        self.transposed2 = nn.ConvTranspose3d(
+            dim_out * 2, dim_out, kernel_size=1, stride=1
+        )
+
+    def forward(self, x):
+        x = self.transposed1(x)
+        x = self.norm(x)
+        return x
+
+
 class Seg_Decoder(nn.Module):
     def __init__(
         self,
-        out_channels=1,
+        out_channels=3,
+        hidden_size=768,
         dims=[48, 96, 192, 384],
-        out_dim=64,
+        heads=[1, 2, 4, 4],
+        kernel_sizes=[4, 2, 2, 2],
         num_slices_list=[64, 32, 16, 8],
     ):
         super().__init__()
-        c1_in_channels, c2_in_channels, c3_in_channels, c4_in_channels = (
-            dims[0],
-            dims[1],
-            dims[2],
-            dims[3],
-        )
 
-        self.block2 = GGM_Block(
-            in_dim=c2_in_channels,
-            out_dim=out_dim,
-            shallow=False,
-            num_slices=num_slices_list[1],
+        self.fu1 = TransposedConvLayer(
+            dim_in=dims[3], dim_out=dims[2], head=heads[2], r=kernel_sizes[3]
         )
-        self.block3 = GGM_Block(
-            in_dim=c3_in_channels,
-            out_dim=out_dim,
-            shallow=False,
+        self.block1 = GGM_Module(
+            dim=dims[2] * 2,
+            out_dim=dims[2],
             num_slices=num_slices_list[2],
-        )
-        self.block4 = GGM_Block(
-            in_dim=c4_in_channels,
-            out_dim=out_dim,
             shallow=False,
-            num_slices=num_slices_list[3],
+        )
+        self.ups = TransposedConvLayer(
+            dim_in=dims[2], dim_out=dims[0], head=heads[1], r=kernel_sizes[2] * 2
         )
 
-        self.fuse = Convblock(out_dim, out_dim, shallow=True)
-        self.fuse2 = nn.Sequential(
-            Convblock(out_dim * 2, out_dim, shallow=False),
-            nn.Conv3d(out_dim, out_dim, kernel_size=1, bias=False),
+        self.fu2 = TransposedConvLayer(
+            dim_in=dims[1], dim_out=dims[0], head=heads[0], r=kernel_sizes[1]
         )
 
-        self.L_feature = Convblock(c1_in_channels, out_dim, shallow=True)
-
-        self.o1_u = nn.ConvTranspose3d(out_dim, out_dim, kernel_size=4, stride=4)
-        self.o2_u = nn.ConvTranspose3d(out_dim * 2, out_dim, kernel_size=2, stride=2)
-
-        self.SEG_head = nn.Conv3d(out_dim * 2, out_channels, kernel_size=1, bias=False)
-
-    def Upsample(self, x, size, align_corners=False):
-        """
-        Wrapper Around the Upsample Call
-        """
-        return nn.functional.interpolate(
-            x, size=size, mode="trilinear", align_corners=align_corners
+        self.block2 = GGM_Module(
+            dim=dims[0] * 2,
+            out_dim=dims[0],
+            num_slices=num_slices_list[0],
+            shallow=True,
         )
 
-    def forward(self, encode_dim):
-        c1, c2, c3, c4 = encode_dim
-        _c4 = self.block4(c4)
-        _c4 = self.Upsample(_c4, c3.size()[2:])
-        _c3 = self.block3(c3)
-        _c2 = self.block2(c2)
-
-        output = self.fuse2(
-            torch.cat(
-                [self.Upsample(_c4, c2.size()[2:]), self.Upsample(_c3, c2.size()[2:])],
-                dim=1,
-            )
+        self.block3 = GGM_Module(
+            dim=dims[0] * 2,
+            out_dim=dims[0],
+            num_slices=num_slices_list[0],
+            shallow=True,
         )
 
-        L_feature = self.L_feature(c1)  # [1, 64, 88, 88]
-        H_feature = self.fuse(_c2)
-        H_feature = self.Upsample(H_feature, L_feature.size()[2:])
+        self.SegHead = nn.ConvTranspose3d(
+            dims[0],
+            out_channels,
+            kernel_size=kernel_sizes[0],
+            stride=kernel_sizes[0],
+        )
 
-        output2 = torch.cat((H_feature, L_feature), dim=1)
+    def forward(self, deep_feature, feature_out):
+        c1, c2, c3, c4 = feature_out
 
-        output = self.o1_u(output)
-        output2 = self.o2_u(output2)
+        c4 = self.fu1(c4)
+        fuse_1 = torch.cat([c3, c4], dim=1)
+        fuse_1 = self.block1(fuse_1)
+        fuse_1 = self.ups(fuse_1)
 
-        SEG_out = self.SEG_head(torch.cat((output, output2), dim=1))
+        c2 = self.fu2(c2)
+        fuse_2 = torch.cat([c2, c1], dim=1)
+        fuse_2 = self.block2(fuse_2)
+        x = torch.cat([fuse_1, fuse_2], dim=1)
 
-        return SEG_out
+        x = self.block3(x)
+        x = self.SegHead(x)
         return x
 
 
 class Class_Decoder(nn.Module):
-
-    def __init__(self, dim=384, class1_channels=1, class2_channels=None):
+    def __init__(self, in_channels, num_tasks, dims):
         super().__init__()
+
+        # 定义解码器各层
+        self.up1 = nn.Sequential(
+            nn.ConvTranspose3d(in_channels, dims[-1], kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+        )
+        self.conv1x1_1 = nn.Conv3d(dims[-1] * 2, dims[-1], kernel_size=1)
+
+        self.up2 = nn.Sequential(
+            nn.ConvTranspose3d(dims[-1], dims[-2], kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+        )
+        self.conv1x1_2 = nn.Conv3d(dims[-2] * 2, dims[-2], kernel_size=1)
+
+        self.up3 = nn.Sequential(
+            nn.ConvTranspose3d(dims[-2], dims[-3], kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+        )
+        self.conv1x1_3 = nn.Conv3d(dims[-3] * 2, dims[-3], kernel_size=1)
+
+        self.up4 = nn.Sequential(
+            nn.ConvTranspose3d(dims[-3], dims[-4], kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+        )
+
         # 添加全局平均池化层
         self.global_avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
 
-        # # 最后一层全连接层用于分类任务
-        # # 为每个任务定义独立的分类头
-        # self.task_heads = nn.ModuleList([
-        #     nn.Sequential(
-        #         nn.Linear(48*2, 64),  # 全连接层
-        #         nn.ReLU(),
-        #         nn.Linear(64, 1)  # 输出层
-        #     ) for _ in range(num_tasks)
-        # ])
-        self.task1_head = nn.Sequential(
-            nn.Linear(dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, class1_channels),  # 全连接层  # 输出层
+        self.task_head = nn.Sequential(
+            nn.Linear(48 * 2, 64), nn.ReLU(), nn.Linear(64, 1)  # 全连接层  # 输出层
         )
-        self.mutil_task = False
-        if class2_channels != None:
-            self.task2_head = nn.Sequential(
-                nn.Linear(dim, 64),
-                nn.ReLU(),
-                nn.Linear(64, class2_channels),  # 全连接层  # 输出层
-            )
-            self.mutil_task = True
 
-    def forward(self, hidden_downsample):
+    def forward(self, hidden_downsample, feature_out):
+        down1, down2, down3, down4 = feature_out
+        # 上采样并融合特征
+        x = self.up1(hidden_downsample)
+        x = torch.cat([x, down4], dim=1)
+        x = self.conv1x1_1(x)
+
+        x = self.up2(x)
+        x = torch.cat([x, down3], dim=1)
+        x = self.conv1x1_2(x)
+
+        x = self.up3(x)
+        x = torch.cat([x, down2], dim=1)
+        x = self.conv1x1_3(x)
+
+        x = self.up4(x)
+        x = torch.cat([x, down1], dim=1)
 
         # 展平特征并送入全连接层
-        features = self.global_avg_pool(hidden_downsample)
+        features = self.global_avg_pool(x)
         features = torch.flatten(features, start_dim=1)
         # 对每个任务应用独立的分类头，并收集结果
         # task_outputs = [task_head(features) for task_head in self.task_heads]
-        task1_outputs = self.task1_head(features)
-        if self.mutil_task == True:
-            task2_outputs = self.task2_head(features)
-            # 在channels维度上拼接所有任务的输出
+        task_outputs = self.task_head(features)
 
-            return task1_outputs, task2_outputs
-        else:
-            return task1_outputs, None
+        # 在channels维度上拼接所有任务的输出
+        # concatenated_output = torch.stack(task_outputs, dim=1)
+        concatenated_output = task_outputs
+
+        return concatenated_output
 
 
 class D_GGMM(nn.Module):
-
     def __init__(
         self,
         in_channels=3,
         out_channels=3,
-        class1_channels=1,
-        class2_channels=1,
+        class_channels=1,
+        num_tasks=2,
+        hidden_size=768,
         depths=[2, 2, 2, 2],
+        kernel_sizes=[4, 2, 2, 2],
         dims=[48, 96, 192, 384],
-        kernel_size=3,
         out_dim=64,
+        heads=[1, 2, 4, 4],
+        out_indices=[0, 1, 2, 3],
         num_slices_list=[64, 32, 16, 8],
         drop_path_rate=0.3,
     ):
         super().__init__()
 
-        self.dnet_down = Encoder(
+        self.encoder = Encoder(
             in_chans=in_channels,
+            kernel_sizes=kernel_sizes,
             depths=depths,
             dims=dims,
+            hidden_size=hidden_size,
             num_slices_list=num_slices_list,
-            drop_path_rate=drop_path_rate,
+            out_indices=out_indices,
+            heads=heads,
         )
+        self.out_channels = out_channels
+        self.dims = dims
+        self.hidden_size = hidden_size
+        self.out_dim = out_dim
+        self.num_slices_list = num_slices_list
+        self.num_tasks = num_tasks
 
         self.seg_decoder = Seg_Decoder(
             out_channels=out_channels,
+            hidden_size=hidden_size,
             dims=dims,
-            out_dim=out_dim,
-            num_slices_list=num_slices_list,
+            heads=heads,
+            kernel_sizes=kernel_sizes,
         )
 
         self.class_decoder = Class_Decoder(
-            dim=dims[-1],
-            class1_channels=class1_channels,
-            class2_channels=class2_channels,
+            in_channels=hidden_size, num_tasks=num_tasks, dims=dims
         )
 
     def Upsample(self, x, size, align_corners=False):
@@ -593,12 +633,13 @@ class D_GGMM(nn.Module):
         )
 
     def forward(self, x):
-        c1, c2, c3, c4 = self.dnet_down(x)
+        deep_feature, feature_out = self.encoder(x)
 
-        CLS_out = self.class_decoder(c4)
+        CLS_out = self.class_decoder(deep_feature, feature_out)
 
-        SEG_out = self.seg_decoder((c1, c2, c3, c4))
+        SEG_out = self.seg_decoder(deep_feature, feature_out)
 
+        # return CLS_out, SEG_out
         return CLS_out, SEG_out
 
 
@@ -652,21 +693,9 @@ if __name__ == "__main__":
     x = torch.randn(size=(2, 3, 128, 128, 64)).to(device)
     # test_x = torch.randn(size=(2, 64, 88, 88)).to(device)
 
-    model = D_GGMM(
-        in_channels=3, out_channels=3, class1_channels=1, class2_channels=1
-    ).to(device)
+    model = D_GGMM(in_channels=3, out_channels=3, class_channels=1).to(device)
 
     CLS_out, SEG_out = model(x)
 
-    print(CLS_out[0].size())
-    print(CLS_out[1].size())
+    print(CLS_out.size())
     print(SEG_out.size())
-
-    # benchmark_model(
-    #     model,
-    #     input_size=(1, 3, 608, 608),
-    #     device=device,
-    #     warmup=10,
-    #     reps=100,
-    # )
-    # print(module(test_x).size())

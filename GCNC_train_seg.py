@@ -12,14 +12,33 @@ from easydict import EasyDict
 from monai.utils import ensure_tuple_rep
 from objprint import objstr
 from timm.optim import optim_factory
+from accelerate.utils import DistributedDataParallelKwargs
 
 from src import utils
 from src.loader import get_dataloader_GCNC as get_dataloader
 from src.optimizer import LinearWarmupCosineAnnealingLR
-from src.utils import Logger, resume_train_state, write_example
+from src.utils import Logger, resume_train_state, write_example, load_model_dict
 
 # from src.model.HWAUNETR_seg import HWAUNETR as FMUNETR_seg
 from get_model import get_model
+
+
+def freeze_encoder_class(model):
+    """
+    冻结 Seg_Decoder 模块的所有参数，适配 accelerate 多卡训练
+    """
+    for name, param in model.named_parameters():
+        if "Class_Decoder" in name or "Encoder" in name:
+            param.requires_grad = False  # 停止梯度更新
+            if param.grad is not None:
+                param.grad.detach_()  # 清理梯度，防止错误同步
+
+    # 强制设置 eval 模式，防止 BN、Dropout 引发 DDP 不一致
+    if hasattr(model, "Class_Decoder"):
+        model.Class_Decoder.eval()
+
+    # if hasattr(model, "Encoder"):
+    #     model.Encoder.eval()
 
 
 def train_one_epoch(
@@ -33,11 +52,17 @@ def train_one_epoch(
     accelerator: Accelerator,
     epoch: int,
     step: int,
+    config: EasyDict,
 ):
     # 训练
     model.train()
+    if config.trainer.choose_model == "HSL_Net":
+        freeze_encoder_class(model)
     for i, image_batch in enumerate(train_loader):
-        logits = model(image_batch["image"])
+        if config.trainer.choose_model == "HSL_Net":
+            _, logits = model(image_batch["image"])
+        else:
+            logits = model(image_batch["image"])
         total_loss = 0
         log = ""
         for name in loss_functions:
@@ -51,9 +76,9 @@ def train_one_epoch(
         accelerator.backward(total_loss)
         optimizer.step()
         optimizer.zero_grad()
-        for name, param in model.named_parameters():
-            if param.grad is None:
-                print(name)
+        # for name, param in model.named_parameters():
+        #     if param.grad is None:
+        #         print(name)
         accelerator.log(
             {
                 "Train/Total Loss": float(total_loss),
@@ -92,6 +117,7 @@ def val_one_epoch(
     step: int,
     post_trans: monai.transforms.Compose,
     accelerator: Accelerator,
+    config: EasyDict,
     test: bool = False,
 ):
     # 验证
@@ -101,7 +127,11 @@ def val_one_epoch(
     hd95_acc = 0
     hd95_class = []
     for i, image_batch in enumerate(val_loader):
-        logits = inference(image_batch["image"], model)
+        if config.trainer.choose_model == "HSL_Net":
+            _, logits = model(image_batch["image"])
+        else:
+            logits = model(image_batch["image"])
+        # logits = inference(image_batch["image"], model)
         val_outputs = post_trans(logits)
         for metric_name in metrics:
             metrics[metric_name](y_pred=val_outputs, y=image_batch["label"])
@@ -168,8 +198,12 @@ if __name__ == "__main__":
     )
 
     accelerator = Accelerator(
-        cpu=False, log_with=["tensorboard"], project_dir=logging_dir
+        kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)],
+        cpu=False,
+        log_with=["tensorboard"],
+        project_dir=logging_dir,
     )
+
     Logger(logging_dir if accelerator.is_local_main_process else None)
 
     accelerator.init_trackers(os.path.split(__file__)[-1].split(".")[0])
@@ -177,6 +211,14 @@ if __name__ == "__main__":
 
     accelerator.print("load model...")
     model = get_model(config)
+    if config.trainer.choose_model == "HSL_Net":
+        check_path = f"{os.getcwd()}/model_store/HSL_Net_class_multimodals/best/"
+        accelerator.print("load pretrain model from %s" % check_path)
+        checkpoint = load_model_dict(
+            check_path + "pytorch_model.bin",
+        )
+        model.load_state_dict(checkpoint, strict=False)
+        accelerator.print(f"Load checkpoint model successfully!")
 
     accelerator.print("load dataset...")
     train_loader, val_loader, test_loader, example = get_dataloader(config)
@@ -289,6 +331,7 @@ if __name__ == "__main__":
             accelerator,
             epoch,
             train_step,
+            config,
         )
         dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
             model,
@@ -298,6 +341,7 @@ if __name__ == "__main__":
             val_step,
             post_trans,
             accelerator,
+            config,
             test=False,
         )
         # 保存模型
@@ -325,6 +369,7 @@ if __name__ == "__main__":
                     -1,
                     post_trans,
                     accelerator,
+                    config,
                     test=True,
                 )
             else:
