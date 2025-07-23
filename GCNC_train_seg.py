@@ -28,7 +28,7 @@ def freeze_encoder_class(model):
     冻结 Seg_Decoder 模块的所有参数，适配 accelerate 多卡训练
     """
     for name, param in model.named_parameters():
-        if "Class_Decoder" in name or "Encoder" in name:
+        if "Class_Decoder" in name:
             param.requires_grad = False  # 停止梯度更新
             if param.grad is not None:
                 param.grad.detach_()  # 清理梯度，防止错误同步
@@ -36,9 +36,6 @@ def freeze_encoder_class(model):
     # 强制设置 eval 模式，防止 BN、Dropout 引发 DDP 不一致
     if hasattr(model, "Class_Decoder"):
         model.Class_Decoder.eval()
-
-    # if hasattr(model, "Encoder"):
-    #     model.Encoder.eval()
 
 
 def train_one_epoch(
