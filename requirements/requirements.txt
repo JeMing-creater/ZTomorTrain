@@ -1,7 +1,7 @@
 timm==0.9.8
 objprint==0.2.3
 accelerate==0.18.0
-torch==2.0.0
+torch==2.7.0
 tensorboard
 easydict
 SimpleITK
@@ -14,4 +14,7 @@ tqdm
 termcolor
 scikit-learn
 pandas
+einops
+ninja
+transformers
 matplotlib

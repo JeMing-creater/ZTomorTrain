@@ -8,7 +8,6 @@ from functools import partial
 import torch.nn.functional as F
 from mamba_ssm import Mamba
 from timm.models.registry import register_model
-from mmengine.model import constant_init, kaiming_init
 from timm.models.layers import DropPath, to_2tuple, make_divisible, trunc_normal_
 
 warnings.filterwarnings("ignore")

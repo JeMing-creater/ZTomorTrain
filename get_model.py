@@ -2,8 +2,8 @@ from monai.networks.nets import SwinUNETR
 from src.model.Class.HWAUNETR_class import HWAUNETR as TFM_UNET_class
 from src.model.Seg.HWAUNETR_seg import HWAUNETR as TFM_UNET_seg
 from src.model.Class.ResNet import resnet50
-from src.model.Class.RVit import Vit as Vit
-from src.model.Class.RTP_Mamba import SAM_MS
+from src.model.Class.Vit import Vit as Vit
+from src.model.Class.TP_Mamba import SAM_MS
 from src.model.Multi_Tasks.HSL_Net import HSL_Net
 
 
@@ -52,13 +52,8 @@ def get_model(config):
             model = SwinUNETR(
                 in_channels=len(use_config.checkModels),
                 out_channels=len(use_config.checkModels),
-                img_size=64,
+                img_size=use_config.target_size,
                 feature_size=48,
-                use_checkpoint=True,
-                spatial_dims=3,
-                depths=[2, 2, 2, 2],
-                num_heads=[1, 2, 4, 4],
-                window_size=8,
             )
             print("SwinUNETR for segmentation")    
     elif config.trainer.task == "Classification":    
