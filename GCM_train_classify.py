@@ -211,10 +211,16 @@ if __name__ == "__main__":
         yaml.load(open("config.yml", "r", encoding="utf-8"), Loader=yaml.FullLoader)
     )
     utils.same_seeds(50)
+    
+    if config.finetune.GCM.checkpoint != 'None':
+        checkpoint_name = config.finetune.GCM.checkpoint
+    else:
+        checkpoint_name = config.trainer.choose_dataset + "_" + config.trainer.task + config.trainer.choose_model
+    
     logging_dir = (
         os.getcwd()
         + "/logs/"
-        + config.finetune.GCM.checkpoint
+        + checkpoint_name
         + str(datetime.now())
         .replace(" ", "_")
         .replace("-", "_")
@@ -312,7 +318,7 @@ if __name__ == "__main__":
             best_test_metrics,
         ) = utils.resume_train_state(
             model,
-            "{}".format(config.finetune.GCM.checkpoint),
+            "{}".format(checkpoint_name),
             optimizer,
             scheduler,
             train_loader,
@@ -353,7 +359,7 @@ if __name__ == "__main__":
         # 保存模型
         if val_top > best_accuracy:
             accelerator.save_state(
-                output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCM.checkpoint}/best"
+                output_dir=f"{os.getcwd()}/model_store/{checkpoint_name}/best"
             )
             best_accuracy = final_metrics["Val/accuracy"]
             best_metrics = final_metrics
@@ -383,7 +389,7 @@ if __name__ == "__main__":
 
         accelerator.print("Cheakpoint...")
         accelerator.save_state(
-            output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCM.checkpoint}/checkpoint"
+            output_dir=f"{os.getcwd()}/model_store/{checkpoint_name}/checkpoint"
         )
         torch.save(
             {
@@ -393,7 +399,7 @@ if __name__ == "__main__":
                 "best_test_accuracy": best_test_accuracy,
                 "best_test_metrics": best_test_metrics,
             },
-            f"{os.getcwd()}/model_store/{config.finetune.GCM.checkpoint}/checkpoint/epoch.pth.tar",
+            f"{os.getcwd()}/model_store/{checkpoint_name}/checkpoint/epoch.pth.tar",
         )
 
     accelerator.print(f"best test accuracy: {best_test_accuracy}")

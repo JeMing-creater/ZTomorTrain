@@ -1,6 +1,6 @@
 trainer:
-  choose_model: HSL_Net   # [HSL_Net, D_GGMM, TFM_UNET_class, TFM_UNET_seg, ResNet, Vit, TP_Mamba]
-  task: Classification   # [Classification, Segmentation]
+  choose_model: SwinUNETR   # Class: [HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
+  task: Segmentation   # [Classification, Segmentation]
   choose_dataset: GCNC   # [GCM, GCNC, BraTS]
   num_epochs: 300
   seg_epochs: 300
@@ -18,19 +18,11 @@ trainer:
 
 finetune:
   GCM:
-    # checkpoint: TFMUNETR_multimodals_ADC_T2_Seg
-    # checkpoint: TFMUNETR_singlemodals_ADC
-    # checkpoint: TFMUNETR_singlemodals_T2FS
-    # checkpoint: ResNet_50
-    # checkpoint: TP_Mamba
-    # checkpoint: ResNet
-    checkpoint: Vit
-    # checkpoint: FMUNETR_class
+    checkpoint: None
   GCNC:
-    # checkpoint: D_GGMM_class_multimodals_v3
-    checkpoint: HSL_Net_class_multimodals_v1
+    checkpoint: None
   BraTS:
-    checkpoint: TFMUNETR_multimodals
+    checkpoint: None
 
 GCM_loader:
   train_ratio: 0.7

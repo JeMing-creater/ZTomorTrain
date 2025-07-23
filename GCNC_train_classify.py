@@ -28,6 +28,8 @@ from src.utils import (
     resume_train_state,
     split_metrics,
     load_model_dict,
+    freeze_seg_decoder,
+    reload_pre_train_model
 )
 from src.eval import (
     calculate_f1_score,
@@ -39,31 +41,7 @@ from src.eval import (
     compute_final_metrics,
 )
 
-# from src.model.HWAUNETR_class import HWAUNETR
-# from src.model.SwinUNETR import MultiTaskSwinUNETR
-# from monai.networks.nets import SwinUNETR
-# from src.model.ResNet import ResNet3DClassifier as ResNet
-# from src.model.Vit import ViT3D
 from get_model import get_model
-
-
-def freeze_seg_decoder(model):
-    """
-    冻结 Seg_Decoder 模块的所有参数，适配 accelerate 多卡训练
-    """
-    for name, param in model.named_parameters():
-        if "Seg_Decoder" in name or "Encoder" in name:
-            param.requires_grad = False  # 停止梯度更新
-            if param.grad is not None:
-                param.grad.detach_()  # 清理梯度，防止错误同步
-
-    # 强制设置 eval 模式，防止 BN、Dropout 引发 DDP 不一致
-    if hasattr(model, "Class_Decoder"):
-        model.Class_Decoder.eval()
-
-    if hasattr(model, "Encoder"):
-        model.Encoder.eval()
-
 
 
 
@@ -245,10 +223,16 @@ if __name__ == "__main__":
         yaml.load(open("config.yml", "r", encoding="utf-8"), Loader=yaml.FullLoader)
     )
     utils.same_seeds(50)
+    if config.finetune.GCNC.checkpoint != 'None':
+        checkpoint_name = config.finetune.GCNC.checkpoint
+    else:
+        checkpoint_name = config.trainer.choose_dataset + "_" + config.trainer.task + config.trainer.choose_model
+        
+    
     logging_dir = (
         os.getcwd()
         + "/logs/"
-        + config.finetune.GCNC.checkpoint
+        + checkpoint_name
         + str(datetime.now())
         .replace(" ", "_")
         .replace("-", "_")
@@ -267,14 +251,9 @@ if __name__ == "__main__":
 
     accelerator.print("load model...")
     model = get_model(config)
+    
     if config.trainer.choose_model == "HSL_Net":
-        check_path = f"{os.getcwd()}/model_store/HSL_Net_class_multimodals_v1/best/"
-        accelerator.print("load pretrain model from %s" % check_path)
-        checkpoint = load_model_dict(
-            check_path + "pytorch_model.bin",
-        )
-        model.load_state_dict(checkpoint, strict=False)
-        accelerator.print(f"Load checkpoint model successfully!")
+        reload_pre_train_model(model, "HSL_Net_class_multimodals_v1")
 
     accelerator.print("load dataset...")
     train_loader, val_loader, test_loader, example = get_dataloader(config)
@@ -357,7 +336,7 @@ if __name__ == "__main__":
             best_test_metrics,
         ) = utils.resume_train_state(
             model,
-            "{}".format(config.finetune.GCNC.checkpoint),
+            "{}".format(checkpoint_name),
             optimizer,
             scheduler,
             train_loader,
@@ -407,7 +386,7 @@ if __name__ == "__main__":
         # 保存模型
         if val_top > best_accuracy:
             accelerator.save_state(
-                output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCNC.checkpoint}/best"
+                output_dir=f"{os.getcwd()}/model_store/{checkpoint_name}/best"
             )
             best_accuracy = final_metrics["Val/accuracy"]
             best_metrics = final_metrics
@@ -438,7 +417,7 @@ if __name__ == "__main__":
 
         accelerator.print("Cheakpoint...")
         accelerator.save_state(
-            output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCNC.checkpoint}/checkpoint"
+            output_dir=f"{os.getcwd()}/model_store/{checkpoint_name}/checkpoint"
         )
         torch.save(
             {
@@ -448,7 +427,7 @@ if __name__ == "__main__":
                 "best_test_accuracy": best_test_accuracy,
                 "best_test_metrics": best_test_metrics,
             },
-            f"{os.getcwd()}/model_store/{config.finetune.GCNC.checkpoint}/checkpoint/epoch.pth.tar",
+            f"{os.getcwd()}/model_store/{checkpoint_name}/checkpoint/epoch.pth.tar",
         )
 
     accelerator.print(f"best test accuracy: {best_test_accuracy}")

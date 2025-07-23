@@ -279,10 +279,17 @@ if __name__ == "__main__":
         yaml.load(open("config.yml", "r", encoding="utf-8"), Loader=yaml.FullLoader)
     )
     utils.same_seeds(50)
+    
+    if config.finetune.GCM.checkpoint != 'None':
+        checkpoint_name = config.finetune.GCM.checkpoint
+    else:
+        checkpoint_name = config.trainer.choose_dataset + "_" + config.trainer.task + config.trainer.choose_model
+    
+    
     logging_dir = (
         os.getcwd()
         + "/logs/"
-        + config.finetune.GCM.checkpoint
+        + checkpoint_name
         + str(datetime.now())
         .replace(" ", "_")
         .replace("-", "_")
@@ -302,7 +309,7 @@ if __name__ == "__main__":
     # model = ResNet(in_channels=len(config.GCM_loader.checkModels), pretrained=False)
     model = get_model(config)
 
-    model = load_model(model, accelerator, config.finetune.GCM.checkpoint)
+    model = load_model(model, accelerator, checkpoint_name)
 
     accelerator.print("load dataset...")
     train_loader, val_loader, test_loader, example = get_dataloader(config)

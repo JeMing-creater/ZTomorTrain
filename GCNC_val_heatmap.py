@@ -284,10 +284,16 @@ if __name__ == "__main__":
         yaml.load(open("config.yml", "r", encoding="utf-8"), Loader=yaml.FullLoader)
     )
     utils.same_seeds(50)
+    
+    if config.finetune.GCNC.checkpoint != 'None':
+        checkpoint_name = config.finetune.GCNC.checkpoint
+    else:
+        checkpoint_name = config.trainer.choose_dataset + "_" + config.trainer.task + config.trainer.choose_model
+    
     logging_dir = (
         os.getcwd()
         + "/logs/"
-        + config.finetune.GCNC.checkpoint
+        + checkpoint_name
         + str(datetime.now())
         .replace(" ", "_")
         .replace("-", "_")
@@ -331,7 +337,7 @@ if __name__ == "__main__":
         )
     )
 
-    model = load_model(model, accelerator, config.finetune.GCNC.checkpoint)
+    model = load_model(model, accelerator, checkpoint_name)
 
     # warmup_model(
     #     model,

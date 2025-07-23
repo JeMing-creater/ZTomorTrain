@@ -17,25 +17,12 @@ from accelerate.utils import DistributedDataParallelKwargs
 from src import utils
 from src.loader import get_dataloader_GCNC as get_dataloader
 from src.optimizer import LinearWarmupCosineAnnealingLR
-from src.utils import Logger, resume_train_state, write_example, load_model_dict
+from src.utils import Logger, resume_train_state, write_example, load_model_dict, freeze_encoder_class
 
 # from src.model.HWAUNETR_seg import HWAUNETR as FMUNETR_seg
 from get_model import get_model
 
 
-def freeze_encoder_class(model):
-    """
-    冻结 Seg_Decoder 模块的所有参数，适配 accelerate 多卡训练
-    """
-    for name, param in model.named_parameters():
-        if "Class_Decoder" in name:
-            param.requires_grad = False  # 停止梯度更新
-            if param.grad is not None:
-                param.grad.detach_()  # 清理梯度，防止错误同步
-
-    # 强制设置 eval 模式，防止 BN、Dropout 引发 DDP 不一致
-    if hasattr(model, "Class_Decoder"):
-        model.Class_Decoder.eval()
 
 
 def train_one_epoch(
@@ -183,10 +170,16 @@ if __name__ == "__main__":
         yaml.load(open("config.yml", "r", encoding="utf-8"), Loader=yaml.FullLoader)
     )
     utils.same_seeds(50)
+    
+    if config.finetune.GCNC.checkpoint != 'None':
+        checkpoint_name = config.finetune.GCNC.checkpoint
+    else:
+        checkpoint_name = config.trainer.choose_dataset + "_" + config.trainer.task + config.trainer.choose_model
+        
     logging_dir = (
         os.getcwd()
         + "/logs/"
-        + config.finetune.GCNC.checkpoint
+        + checkpoint_name
         + str(datetime.now())
         .replace(" ", "_")
         .replace("-", "_")
@@ -208,14 +201,6 @@ if __name__ == "__main__":
 
     accelerator.print("load model...")
     model = get_model(config)
-    if config.trainer.choose_model == "HSL_Net":
-        check_path = f"{os.getcwd()}/model_store/HSL_Net_class_multimodals/best/"
-        accelerator.print("load pretrain model from %s" % check_path)
-        checkpoint = load_model_dict(
-            check_path + "pytorch_model.bin",
-        )
-        model.load_state_dict(checkpoint, strict=False)
-        accelerator.print(f"Load checkpoint model successfully!")
 
     accelerator.print("load dataset...")
     train_loader, val_loader, test_loader, example = get_dataloader(config)
@@ -306,7 +291,7 @@ if __name__ == "__main__":
             best_hd95_metrics,
         ) = utils.resume_train_state(
             model,
-            "{}".format(config.finetune.GCNC.checkpoint),
+            "{}".format(checkpoint_name),
             optimizer,
             scheduler,
             train_loader,
@@ -344,7 +329,7 @@ if __name__ == "__main__":
         # 保存模型
         if dice_acc > best_score:
             accelerator.save_state(
-                output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCNC.checkpoint}/best"
+                output_dir=f"{os.getcwd()}/model_store/{checkpoint_name}/best"
             )
             best_score = dice_acc
             best_metrics = dice_class
@@ -383,7 +368,7 @@ if __name__ == "__main__":
 
         accelerator.print("Cheakpoint...")
         accelerator.save_state(
-            output_dir=f"{os.getcwd()}/model_store/{config.finetune.GCNC.checkpoint}/checkpoint"
+            output_dir=f"{os.getcwd()}/model_store/{checkpoint_name}/checkpoint"
         )
         torch.save(
             {
@@ -393,7 +378,7 @@ if __name__ == "__main__":
                 "best_hd95": best_hd95,
                 "best_hd95_metrics": best_hd95_metrics,
             },
-            f"{os.getcwd()}/model_store/{config.finetune.GCNC.checkpoint}/checkpoint/epoch.pth.tar",
+            f"{os.getcwd()}/model_store/{checkpoint_name}/checkpoint/epoch.pth.tar",
         )
 
     accelerator.print(f"dice score: {best_test_score}")
