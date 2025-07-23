@@ -48,7 +48,19 @@ def get_model(config):
                 out_indices=[0, 1, 2, 3],
             )
             print("TFM_UNET for segmentation")
-            
+        elif "SwinUNETR" in config.trainer.choose_model:
+            model = SwinUNETR(
+                in_channels=len(use_config.checkModels),
+                out_channels=len(use_config.checkModels),
+                img_size=64,
+                feature_size=48,
+                use_checkpoint=True,
+                spatial_dims=3,
+                depths=[2, 2, 2, 2],
+                num_heads=[1, 2, 4, 4],
+                window_size=8,
+            )
+            print("SwinUNETR for segmentation")    
     elif config.trainer.task == "Classification":    
         if "ResNet" in config.trainer.choose_model:
             model = resnet50(

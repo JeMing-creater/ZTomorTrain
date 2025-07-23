@@ -537,3 +537,45 @@ def copy_file(src_file: str, dst_dir: str) -> None:
     dst_file = os.path.join(dst_dir, file_name)
     shutil.copy2(src_file, dst_file)
     print(f"Copied {src_file} to {dst_file}")
+
+def freeze_seg_decoder(model):
+    """
+    冻结 Seg_Decoder 模块的所有参数，适配 accelerate 多卡训练
+    """
+    for name, param in model.named_parameters():
+        if "Seg_Decoder" in name or "Encoder" in name:
+            param.requires_grad = False  # 停止梯度更新
+            if param.grad is not None:
+                param.grad.detach_()  # 清理梯度，防止错误同步
+
+    # 强制设置 eval 模式，防止 BN、Dropout 引发 DDP 不一致
+    if hasattr(model, "Class_Decoder"):
+        model.Class_Decoder.eval()
+
+    if hasattr(model, "Encoder"):
+        model.Encoder.eval()
+        
+def freeze_encoder_class(model):
+    """
+    冻结 Seg_Decoder 模块的所有参数，适配 accelerate 多卡训练
+    """
+    for name, param in model.named_parameters():
+        if "Class_Decoder" in name:
+            param.requires_grad = False  # 停止梯度更新
+            if param.grad is not None:
+                param.grad.detach_()  # 清理梯度，防止错误同步
+
+    # 强制设置 eval 模式，防止 BN、Dropout 引发 DDP 不一致
+    if hasattr(model, "Class_Decoder"):
+        model.Class_Decoder.eval()
+
+
+def reload_pre_train_model(model, checkpoint_path="HSL_Net_class_multimodals_v1"):
+    check_path = f"{os.getcwd()}/model_store/{checkpoint_path}/best/"
+    accelerator.print("load pretrain model from %s" % check_path)
+    checkpoint = load_model_dict(
+        check_path + "pytorch_model.bin",
+    )
+    model.load_state_dict(checkpoint, strict=False)
+    accelerator.print(f"Load checkpoint model successfully!")
+    return model
