@@ -1,5 +1,6 @@
 trainer:
-  choose_model: HSL_Net   # [HSL_Net, D_GGMM, FMUNETR_class, FMUNETR_seg, ResNet, Vit, TP_Mamba]
+  choose_model: HSL_Net   # [HSL_Net, D_GGMM, TFM_UNET_class, TFM_UNET_seg, ResNet, Vit, TP_Mamba]
+  task: Classification   # [Classification, Segmentation]
   choose_dataset: GCNC   # [GCM, GCNC, BraTS]
   num_epochs: 300
   seg_epochs: 300
