@@ -1,6 +1,6 @@
 trainer:
-  choose_model: SwinUNETR   # Class: [HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
-  task: Segmentation   # [Classification, Segmentation]
+  choose_model: HSL_Net   # Class: [HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
+  task: Classification   # [Classification, Segmentation]
   choose_dataset: GCNC   # [GCM, GCNC, BraTS]
   num_epochs: 300
   seg_epochs: 300

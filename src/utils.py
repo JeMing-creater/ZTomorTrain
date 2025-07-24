@@ -554,7 +554,7 @@ def freeze_seg_decoder(model):
 
     if hasattr(model, "Encoder"):
         model.Encoder.eval()
-        
+
 def freeze_encoder_class(model):
     """
     冻结 Seg_Decoder 模块的所有参数，适配 accelerate 多卡训练
@@ -570,7 +570,9 @@ def freeze_encoder_class(model):
         model.Class_Decoder.eval()
 
 
-def reload_pre_train_model(model, checkpoint_path="HSL_Net_class_multimodals_v1"):
+def reload_pre_train_model(
+    model, accelerator,checkpoint_path="HSL_Net_class_multimodals_v1"
+):
     check_path = f"{os.getcwd()}/model_store/{checkpoint_path}/best/"
     accelerator.print("load pretrain model from %s" % check_path)
     checkpoint = load_model_dict(
