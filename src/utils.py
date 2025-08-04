@@ -146,9 +146,13 @@ def resume_train_state(
         epoch_checkpoint = torch.load(base_path + "/epoch.pth.tar", map_location="cpu")
         starting_epoch = epoch_checkpoint["epoch"] + 1
         best_score = epoch_checkpoint["best_score"]
+        best_test_score = epoch_checkpoint["best_test_score"]
         best_metrics = epoch_checkpoint["best_metrics"]
+        best_test_metrics = epoch_checkpoint["best_test_metrics"]
         best_hd95 = epoch_checkpoint["best_hd95"]
+        best_test_hd95 = epoch_checkpoint["best_test_hd95"]
         best_hd95_metrics = epoch_checkpoint["best_hd95_metrics"]
+        best_test_hd95_metrics = epoch_checkpoint["best_test_hd95_metrics"]
         step = starting_epoch * len(train_loader)
         accelerator.load_state(base_path)
         accelerator.print(
@@ -161,9 +165,13 @@ def resume_train_state(
             starting_epoch,
             step,
             best_score,
+            best_test_score,
             best_metrics,
+            best_test_metrics,
             best_hd95,
+            best_test_hd95,
             best_hd95_metrics,
+            best_test_hd95_metrics,
         )
     except Exception as e:
         accelerator.print(e)

@@ -26,6 +26,8 @@ from timm.optim import optim_factory
 import torch.nn.functional as F
 from matplotlib import cm
 import matplotlib.pyplot as plt
+from scipy.ndimage import gaussian_filter
+
 from src import utils
 from src.loader import get_dataloader_GCNC as get_dataloader
 from src.loader import get_GCNC_transforms as get_transforms
@@ -48,8 +50,6 @@ from src.eval import (
     accumulate_metrics,
     compute_final_metrics,
 )
-from src.optimizer import LinearWarmupCosineAnnealingLR
-
 
 # from src.model.HWAUNETR_class import HWAUNETR
 # from src.model.SwinUNETR import MultiTaskSwinUNETR
@@ -75,12 +75,10 @@ def load_model(model, accelerator, checkpoint):
     try:
         check_path = f"{os.getcwd()}/model_store/{checkpoint}/best/"
         accelerator.print("load model from %s" % check_path)
-
-        accelerator.load_state(check_path)
         checkpoint = load_model_dict(
             check_path + "pytorch_model.bin",
         )
-        # model.load_state_dict(checkpoint)
+        model.load_state_dict(checkpoint)
         accelerator.print(f"Load checkpoint model successfully!")
     except Exception as e:
         accelerator.print(e)
@@ -88,50 +86,98 @@ def load_model(model, accelerator, checkpoint):
     return model
 
 
+def get_target_layer(model, target_layer=None):
+    if target_layer is None:
+        conv_list = []
+        for name, module in model.named_modules():
+            if isinstance(module, torch.nn.Conv3d):
+                conv_list.append((name, module))
+            if isinstance(module, torch.nn.AdaptiveAvgPool3d):
+                break  # 到池化为止
+        if not conv_list:
+            raise ValueError("未找到 Conv3d 层")
+        target_layer = conv_list[-1][1]
+        print(f"[Grad-CAM] Using target layer: {conv_list[-1][0]}")
+    return target_layer
+
+
+def get_last_conv3d_for_model(model):
+    """
+    自动找到模型中的最后一个 Conv3d 层，并返回一个可以直接用于
+    model.<layer> 访问的变量（即 model.具体层名）。
+    """
+    last_name = None
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv3d):
+            last_name = name  # 记录路径
+
+    if last_name is None:
+        raise ValueError("模型中未找到任何 Conv3d 层！")
+
+    # 通过路径获取真正的 model.<path> 变量
+    target = model
+    for attr in last_name.split("."):
+        target = getattr(target, attr)
+
+    print(f"[LayerActivations] 已找到最后一个 Conv3d 层: model.{last_name}")
+    return target
+
+
+def get_conv3d_for_model(model):
+    """
+    返回模型中的倒数第三个 Conv3d 层，作为 model.<path> 对象，方便直接用 LayerActivations。
+    如果模型中 Conv3d 少于 3 个，则返回最后一个。
+    """
+    conv_names = []
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv3d):
+            conv_names.append(name)
+
+    if not conv_names:
+        raise ValueError("模型中未找到任何 Conv3d 层！")
+
+    # 选择倒数第三个，如果不足则取最后一个
+    target_name = conv_names[-3] if len(conv_names) >= 3 else conv_names[-1]
+
+    # 根据路径找到真正的 model.<path> 对象
+    target = model
+    for attr in target_name.split("."):
+        target = getattr(target, attr)
+
+    print(f"[LayerActivations] 已找到倒数第三个 Conv3d 层: model.{target_name}")
+    return target
+
+
 def write_heatmap(config, model, accelerator):
-    # 验证
     model.eval()
     load_transform, _, _ = get_transforms(config)
-    # cam = GradCAM(nn_module=model, target_layers=config.visualization.heatmap.target_layers)
 
     choose_image = (
         config.GCNC_loader.root
-        + "/"
-        + "ALL"
-        + "/"
+        + "/ALL/"
         + f"{config.visualization.heatmap.GCNC.choose_image}"
     )
     accelerator.print("valing heatmap for image: ", choose_image)
-    images = []
-    labels = []
-    image_size = []
-    affines = []
-    MRI_array_list = []
 
-    all_models = os.listdir(choose_image + "/")
-
-    # for i in range(len(config.GCNC_loader.checkModels)):
-    for i in range(len(all_models)):
-        check_model = all_models[i]
-
+    images, labels, image_size, affines, MRI_array_list = [], [], [], [], []
+    for i in range(len(config.GCNC_loader.checkModels)):
         image_path = (
             choose_image
             + "/"
-            + check_model
+            + config.GCNC_loader.checkModels[i]
             + "/"
             + f"{config.visualization.heatmap.GCNC.choose_image}.nii.gz"
         )
         label_path = (
             choose_image
             + "/"
-            + check_model
+            + config.GCNC_loader.checkModels[i]
             + "/"
             + f"{config.visualization.heatmap.GCNC.choose_image}seg.nii.gz"
         )
 
         MRI = nibabel.load(image_path)
-        MRI_array = MRI.get_fdata()
-        MRI_array = MRI_array.astype("float32")
+        MRI_array = MRI.get_fdata().astype("float32")
         MRI_array_list.append(MRI_array)
 
         batch = load_transform[i]({"image": image_path, "label": label_path})
@@ -143,140 +189,101 @@ def write_heatmap(config, model, accelerator):
         affines.append(batch["label_meta_dict"]["affine"])
 
     input_data = torch.cat(images, dim=1).to(accelerator.device)
-    conv_out = LayerActivations(model.hidden_downsample)
+    # conv_out = LayerActivations(get_conv3d_for_model(model))
+    conv_out = LayerActivations(model.encoder.hidden_downsample)
 
     _ = model(input_data)
     cam = conv_out.features
-    conv_out.remove  # delete the hook
+    conv_out.remove  # 取消 hook
 
-    print("cam.shape1", cam.shape)
     cam = cam.cpu().detach().numpy().squeeze()
-    print("cam.shape2", cam.shape)
-    cam = cam[1]
-    print("cam.shape3", cam.shape)
+    cam = cam[1]  # 取第 1 个通道的激活图
 
     count = 1
     for MRI_array in MRI_array_list:
+        capi = resize(cam, MRI_array.shape, order=1, mode="reflect", anti_aliasing=True)
+        heatmap = (capi - capi.min()) / (capi.max() - capi.min() + 1e-8)
 
-        capi = resize(cam, (MRI_array.shape[0], MRI_array.shape[1], MRI_array.shape[2]))
-        capi = np.maximum(capi, 0)
-        heatmap = (capi - capi.min()) / (capi.max() - capi.min())
+        # 中间切片
+        axial_idx = MRI_array.shape[-1] // 2
+        coronal_idx = MRI_array.shape[-2] // 2
+        sagittal_idx = MRI_array.shape[-3] // 2
+
+        sagittal_img = MRI_array[sagittal_idx, :, :]
+        axial_img = MRI_array[:, :, axial_idx]
+        coronal_img = MRI_array[:, coronal_idx, :]
+
+        sagittal_cam = heatmap[sagittal_idx, :, :]
+        axial_cam = heatmap[:, :, axial_idx]
+        coronal_cam = heatmap[:, coronal_idx, :]
+
+        # --- 统一三视图尺寸 ---
+        target_h = max(sagittal_img.shape[0], axial_img.shape[0], coronal_img.shape[0])
+        target_w = max(sagittal_img.shape[1], axial_img.shape[1], coronal_img.shape[1])
+
+        def resize_to_target(img):
+            return resize(
+                img, (target_h, target_w), order=1, mode="reflect", anti_aliasing=True
+            )
+
+        sagittal_img, sagittal_cam = resize_to_target(sagittal_img), resize_to_target(
+            sagittal_cam
+        )
+        axial_img, axial_cam = resize_to_target(axial_img), resize_to_target(axial_cam)
+        coronal_img, coronal_cam = resize_to_target(coronal_img), resize_to_target(
+            coronal_cam
+        )
+        # ------------------------
+
         f, axarr = plt.subplots(3, 3, figsize=(12, 12))
-
         f.suptitle("CAM_3D_medical_image", fontsize=30)
 
-        # 取中间值作为切片
-        axial_slice_count = math.ceil(MRI_array.shape[-1] / 2)
-        coronal_slice_count = math.ceil(MRI_array.shape[-2] / 2)
-        sagittal_slice_count = math.ceil(MRI_array.shape[-3] / 2)
-
-        sagittal_MRI_img = np.squeeze(MRI_array[sagittal_slice_count, :, :])
-        sagittal_grad_cmap_img = np.squeeze(heatmap[sagittal_slice_count, :, :])
-
-        axial_MRI_img = np.squeeze(MRI_array[:, :, axial_slice_count])
-        axial_grad_cmap_img = np.squeeze(heatmap[:, :, axial_slice_count])
-
-        coronal_MRI_img = np.squeeze(MRI_array[:, coronal_slice_count, :])
-        coronal_grad_cmap_img = np.squeeze(heatmap[:, coronal_slice_count, :])
-
-        # Sagittal view
-        img_plot = axarr[0, 0].imshow(np.rot90(sagittal_MRI_img, 1), cmap="gray")
+        # Sagittal
+        axarr[0, 0].imshow(np.rot90(sagittal_img, 1), cmap="gray")
         axarr[0, 0].axis("off")
         axarr[0, 0].set_title("Sagittal MRI", fontsize=25)
-
-        img_plot = axarr[0, 1].imshow(np.rot90(sagittal_grad_cmap_img, 1), cmap="jet")
+        axarr[0, 1].imshow(np.rot90(sagittal_cam, 1), cmap="jet")
         axarr[0, 1].axis("off")
         axarr[0, 1].set_title("Weight-CAM", fontsize=25)
-
-        # Zoom in ten times to make the weight map smoother
-        sagittal_MRI_img = ndimage.zoom(sagittal_MRI_img, (1, 1), order=3)
-        # Overlay the weight map with the original image
-        sagittal_overlay = cv2.addWeighted(
-            sagittal_MRI_img, 0.3, sagittal_grad_cmap_img, 0.6, 0
-        )
-
-        img_plot = axarr[0, 2].imshow(np.rot90(sagittal_overlay, 1), cmap="jet")
+        sagittal_overlay = cv2.addWeighted(sagittal_img, 0.3, sagittal_cam, 0.6, 0)
+        axarr[0, 2].imshow(np.rot90(sagittal_overlay, 1), cmap="jet")
         axarr[0, 2].axis("off")
         axarr[0, 2].set_title("Overlay", fontsize=25)
 
-        # Axial view
-        img_plot = axarr[1, 0].imshow(np.rot90(axial_MRI_img, 1), cmap="gray")
+        # Axial
+        axarr[1, 0].imshow(np.rot90(axial_img, 1), cmap="gray")
         axarr[1, 0].axis("off")
         axarr[1, 0].set_title("Axial MRI", fontsize=25)
-
-        img_plot = axarr[1, 1].imshow(np.rot90(axial_grad_cmap_img, 1), cmap="jet")
+        axarr[1, 1].imshow(np.rot90(axial_cam, 1), cmap="jet")
         axarr[1, 1].axis("off")
         axarr[1, 1].set_title("Weight-CAM", fontsize=25)
-
-        axial_MRI_img = ndimage.zoom(axial_MRI_img, (1, 1), order=3)
-        axial_overlay = cv2.addWeighted(axial_MRI_img, 0.3, axial_grad_cmap_img, 0.6, 0)
-
-        img_plot = axarr[1, 2].imshow(np.rot90(axial_overlay, 1), cmap="jet")
+        axial_overlay = cv2.addWeighted(axial_img, 0.3, axial_cam, 0.6, 0)
+        axarr[1, 2].imshow(np.rot90(axial_overlay, 1), cmap="jet")
         axarr[1, 2].axis("off")
         axarr[1, 2].set_title("Overlay", fontsize=25)
 
-        # coronal view
-        img_plot = axarr[2, 0].imshow(np.rot90(coronal_MRI_img, 1), cmap="gray")
+        # Coronal
+        axarr[2, 0].imshow(np.rot90(coronal_img, 1), cmap="gray")
         axarr[2, 0].axis("off")
-        axarr[2, 0].set_title("Coronal MRI", fontsize=50)
-
-        img_plot = axarr[2, 1].imshow(np.rot90(coronal_grad_cmap_img, 1), cmap="jet")
+        axarr[2, 0].set_title("Coronal MRI", fontsize=25)
+        axarr[2, 1].imshow(np.rot90(coronal_cam, 1), cmap="jet")
         axarr[2, 1].axis("off")
-        axarr[2, 1].set_title("Weight-CAM", fontsize=50)
-
-        coronal_ct_img = ndimage.zoom(coronal_MRI_img, (1, 1), order=3)
-        Coronal_overlay = cv2.addWeighted(
-            coronal_ct_img, 0.3, coronal_grad_cmap_img, 0.6, 0
-        )
-
-        img_plot = axarr[2, 2].imshow(np.rot90(Coronal_overlay, 1), cmap="jet")
+        axarr[2, 1].set_title("Weight-CAM", fontsize=25)
+        coronal_overlay = cv2.addWeighted(coronal_img, 0.3, coronal_cam, 0.6, 0)
+        axarr[2, 2].imshow(np.rot90(coronal_overlay, 1), cmap="jet")
         axarr[2, 2].axis("off")
-        axarr[2, 2].set_title("Overlay", fontsize=50)
+        axarr[2, 2].set_title("Overlay", fontsize=25)
 
-        plt.colorbar(img_plot, shrink=0.5)  # color bar if need
-        # plt.show()
-        ensure_directory_exists(config.visualization.heatmap.GCNC.write_path)
-        plt.savefig(
+        plt.colorbar(axarr[2, 2].images[0], shrink=0.5)
+        ensure_directory_exists(
             config.visualization.heatmap.GCNC.write_path
             + "/"
-            + f"CAM_demo_test_{count}.png"
+            + f"{config.visualization.heatmap.GCNC.choose_image}"
+        )
+        plt.savefig(
+            f"{config.visualization.heatmap.GCNC.write_path}/{config.visualization.heatmap.GCNC.choose_image}/Heatmap_{config.GCNC_loader.checkModels[count-1]}.png"
         )
         count += 1
-
-
-def warmup_model(
-    model: torch.nn.Module,
-    loss_functions: Dict[str, torch.nn.modules.loss._Loss],
-    train_loader: torch.utils.data.DataLoader,
-    optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler._LRScheduler,
-    accelerator: Accelerator,
-    epoch: int,
-    step: int,
-):
-    # 训练
-    model.train()
-    for i, image_batch in enumerate(train_loader):
-        logits = model(image_batch["image"])
-        total_loss = 0
-        for name in loss_functions:
-            alpth = 1
-            loss = loss_functions[name](logits, image_batch["label"])
-            total_loss += alpth * loss
-
-        accelerator.backward(total_loss)
-        optimizer.step()
-        optimizer.zero_grad()
-        # for name, param in model.named_parameters():
-        #     if param.grad is None:
-        #         print(name)
-        accelerator.print(
-            f"Epoch [{epoch+1}/{config.trainer.num_epochs}][{i + 1}/{len(train_loader)}] Warmup Loss:{total_loss}",
-            flush=True,
-        )
-        step += 1
-    scheduler.step(epoch)
-    return step
 
 
 if __name__ == "__main__":
@@ -284,12 +291,17 @@ if __name__ == "__main__":
         yaml.load(open("config.yml", "r", encoding="utf-8"), Loader=yaml.FullLoader)
     )
     utils.same_seeds(50)
-    
-    if config.finetune.GCNC.checkpoint != 'None':
+
+    if config.finetune.GCNC.checkpoint != "None":
         checkpoint_name = config.finetune.GCNC.checkpoint
     else:
-        checkpoint_name = config.trainer.choose_dataset + "_" + config.trainer.task + config.trainer.choose_model
-    
+        checkpoint_name = (
+            config.trainer.choose_dataset
+            + "_"
+            + config.trainer.task
+            + config.trainer.choose_model
+        )
+
     logging_dir = (
         os.getcwd()
         + "/logs/"
@@ -310,45 +322,8 @@ if __name__ == "__main__":
     accelerator.print("load model...")
     model = get_model(config)
 
-    accelerator.print("warm up model...")
-    train_loader, val_loader, test_loader, example = get_dataloader(config)
-    loss_functions = {
-        "focal_loss": monai.losses.FocalLoss(to_onehot_y=False),
-        "dice_loss": monai.losses.DiceLoss(
-            smooth_nr=0, smooth_dr=1e-5, to_onehot_y=False, sigmoid=True
-        ),
-    }
-    optimizer = optim_factory.create_optimizer_v2(
-        model,
-        opt=config.trainer.optimizer,
-        weight_decay=float(config.trainer.weight_decay),
-        lr=float(config.trainer.lr),
-        betas=(config.trainer.betas[0], config.trainer.betas[1]),
-    )
-    scheduler = LinearWarmupCosineAnnealingLR(
-        optimizer,
-        warmup_epochs=config.trainer.warmup,
-        max_epochs=config.trainer.num_epochs,
-    )
-
-    model, optimizer, scheduler, train_loader, val_loader, test_loader = (
-        accelerator.prepare(
-            model, optimizer, scheduler, train_loader, val_loader, test_loader
-        )
-    )
-
     model = load_model(model, accelerator, checkpoint_name)
-
-    # warmup_model(
-    #     model,
-    #     loss_functions,
-    #     train_loader,
-    #     optimizer,
-    #     scheduler,
-    #     accelerator,
-    #     0,
-    #     0,
-    # )
+    model = accelerator.prepare(model)
 
     accelerator.print("write heatmap...")
     write_heatmap(config, model, accelerator)

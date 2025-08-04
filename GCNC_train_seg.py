@@ -17,12 +17,16 @@ from accelerate.utils import DistributedDataParallelKwargs
 from src import utils
 from src.loader import get_dataloader_GCNC as get_dataloader
 from src.optimizer import LinearWarmupCosineAnnealingLR
-from src.utils import Logger, resume_train_state, write_example, load_model_dict, freeze_encoder_class
+from src.utils import (
+    Logger,
+    resume_train_state,
+    write_example,
+    load_model_dict,
+    freeze_encoder_class,
+)
 
 # from src.model.HWAUNETR_seg import HWAUNETR as FMUNETR_seg
 from get_model import get_model
-
-
 
 
 def train_one_epoch(
@@ -170,12 +174,17 @@ if __name__ == "__main__":
         yaml.load(open("config.yml", "r", encoding="utf-8"), Loader=yaml.FullLoader)
     )
     utils.same_seeds(50)
-    
-    if config.finetune.GCNC.checkpoint != 'None':
+
+    if config.finetune.GCNC.checkpoint != "None":
         checkpoint_name = config.finetune.GCNC.checkpoint
     else:
-        checkpoint_name = config.trainer.choose_dataset + "_" + config.trainer.task + config.trainer.choose_model
-        
+        checkpoint_name = (
+            config.trainer.choose_dataset
+            + "_"
+            + config.trainer.task
+            + config.trainer.choose_model
+        )
+
     logging_dir = (
         os.getcwd()
         + "/logs/"
@@ -286,9 +295,13 @@ if __name__ == "__main__":
             starting_epoch,
             train_step,
             best_score,
+            best_test_score,
             best_metrics,
+            best_test_metrics,
             best_hd95,
+            best_test_hd95,
             best_hd95_metrics,
+            best_test_hd95_metrics,
         ) = utils.resume_train_state(
             model,
             "{}".format(checkpoint_name),
@@ -374,9 +387,13 @@ if __name__ == "__main__":
             {
                 "epoch": epoch,
                 "best_score": best_score,
+                "best_test_score": best_test_score,
                 "best_metrics": best_metrics,
+                "best_test_metrics": best_test_metrics,
                 "best_hd95": best_hd95,
+                "best_test_hd95": best_test_hd95,
                 "best_hd95_metrics": best_hd95_metrics,
+                "best_test_hd95_metrics": best_test_hd95_metrics,
             },
             f"{os.getcwd()}/model_store/{checkpoint_name}/checkpoint/epoch.pth.tar",
         )
