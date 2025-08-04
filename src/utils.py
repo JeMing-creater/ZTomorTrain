@@ -80,12 +80,10 @@ def load_model_dict(download_path, save_path=None, check_hash=True) -> OrderedDi
             download_path,
             model_dir=save_path,
             check_hash=check_hash,
-            map_location=torch.device("cpu")
+            map_location=torch.device("cpu"),
         )
     else:
-        state_dict = torch.load(
-            download_path, map_location=torch.device("cpu")
-        )
+        state_dict = torch.load(download_path, map_location=torch.device("cpu"))
     return state_dict
 
 
@@ -103,7 +101,8 @@ def resume_train_state(
             # Get the most recent checkpoint
             base_path = os.getcwd() + "/" + "model_store" + "/" + path + "/checkpoint"
             epoch_checkpoint = torch.load(
-                base_path + "/epoch.pth.tar", map_location="gpu" if accelerator.is_local_main_process else "cpu"
+                base_path + "/epoch.pth.tar",
+                map_location="gpu" if accelerator.is_local_main_process else "cpu",
             )
             starting_epoch = epoch_checkpoint["epoch"] + 1
             best_accuracy = epoch_checkpoint["best_accuracy"]
@@ -183,8 +182,12 @@ def resume_train_state(
             0,
             0,
             torch.tensor(0),
+            torch.tensor(0),
+            [],
             [],
             torch.tensor(1000),
+            torch.tensor(1000),
+            [],
             [],
         )
 
@@ -546,6 +549,7 @@ def copy_file(src_file: str, dst_dir: str) -> None:
     shutil.copy2(src_file, dst_file)
     print(f"Copied {src_file} to {dst_file}")
 
+
 def freeze_seg_decoder(model):
     """
     冻结 Seg_Decoder 模块的所有参数，适配 accelerate 多卡训练
@@ -563,6 +567,7 @@ def freeze_seg_decoder(model):
     if hasattr(model, "Encoder"):
         model.Encoder.eval()
 
+
 def freeze_encoder_class(model):
     """
     冻结 Seg_Decoder 模块的所有参数，适配 accelerate 多卡训练
@@ -579,7 +584,7 @@ def freeze_encoder_class(model):
 
 
 def reload_pre_train_model(
-    model, accelerator,checkpoint_path="HSL_Net_class_multimodals_v1"
+    model, accelerator, checkpoint_path="HSL_Net_class_multimodals_v1"
 ):
     check_path = f"{os.getcwd()}/model_store/{checkpoint_path}/best/"
     accelerator.print("load pretrain model from %s" % check_path)
