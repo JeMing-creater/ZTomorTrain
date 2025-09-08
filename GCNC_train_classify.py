@@ -29,7 +29,7 @@ from src.utils import (
     split_metrics,
     load_model_dict,
     freeze_seg_decoder,
-    reload_pre_train_model
+    reload_pre_train_model,
 )
 from src.eval import (
     calculate_f1_score,
@@ -42,7 +42,6 @@ from src.eval import (
 )
 
 from get_model import get_model
-
 
 
 def train_one_epoch(
@@ -66,7 +65,7 @@ def train_one_epoch(
     # for i, image_batch in enumerate(train_loader):
     for i, image_batch in loop:
         # for i, image_batch in enumerate(train_loader):
-        if config.trainer.choose_model == 'D_GGMM':
+        if config.trainer.choose_model == "HSL_Net":
             logits, _ = model(image_batch["image"])
         else:
             logits = model(image_batch["image"])
@@ -159,7 +158,7 @@ def val_one_epoch(
     # for i, image_batch in enumerate(val_loader):
     for i, image_batch in loop:
         # logits = inference(model, image_batch['image'])
-        if config.trainer.choose_model == "D_GGMM":
+        if config.trainer.choose_model == "HSL_Net":
             logits, _ = model(image_batch["image"])
         else:
             logits = model(image_batch["image"])
@@ -223,12 +222,16 @@ if __name__ == "__main__":
         yaml.load(open("config.yml", "r", encoding="utf-8"), Loader=yaml.FullLoader)
     )
     utils.same_seeds(50)
-    if config.finetune.GCNC.checkpoint != 'None':
+    if config.finetune.GCNC.checkpoint != "None":
         checkpoint_name = config.finetune.GCNC.checkpoint
     else:
-        checkpoint_name = config.trainer.choose_dataset + "_" + config.trainer.task + config.trainer.choose_model
-        
-    
+        checkpoint_name = (
+            config.trainer.choose_dataset
+            + "_"
+            + config.trainer.task
+            + config.trainer.choose_model
+        )
+
     logging_dir = (
         os.getcwd()
         + "/logs/"
@@ -251,9 +254,9 @@ if __name__ == "__main__":
 
     accelerator.print("load model...")
     model = get_model(config)
-    
+
     if config.trainer.choose_model == "HSL_Net":
-        reload_pre_train_model(model, "HSL_Net_class_multimodals_v1")
+        reload_pre_train_model(model, accelerator, "HSL_Net_class_multimodals_v1")
 
     accelerator.print("load dataset...")
     train_loader, val_loader, test_loader, example = get_dataloader(config)
@@ -378,7 +381,7 @@ if __name__ == "__main__":
             post_trans,
             accelerator,
             config,
-            False
+            False,
         )
 
         val_top = final_metrics["Val/accuracy"]

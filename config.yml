@@ -1,5 +1,5 @@
 trainer:
-  choose_model: SwinUNETR   # Class: [HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
+  choose_model: HSL_Net   # Class: [HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
   task: Segmentation   # [Classification, Segmentation]
   choose_dataset: GCNC   # [GCM, GCNC, BraTS]
   num_epochs: 300
@@ -56,7 +56,7 @@ GCNC_loader:
   val_ratio: 0.1
   test_ratio: 0.2
   # fusion: do you need test dataset? if not, can use fusion to fuse val and test data to one dataloader.
-  fusion: True
+  fusion: False
   num_workers: 0
   # use this flag can fix experiment examples, must set train_example.txt, val_example.txt and test_example.txt to root.
   fix_example: False
@@ -65,7 +65,8 @@ GCNC_loader:
   # leapfrog: some data error can write in this list to remove from dataloader
   # leapfrog: ['0001902261', '0000439538','0002235469','0001308202']
   leapfrog: ['H32444']
-  root: /root/.cache/huggingface/forget/datasets/GZNC/
+  root: /mnt/liangjm/GCNC/
+  test_center: 3
   # checkModels: ["T1WI","T1WI+C","T2WI"]
   checkModels: ["T1", "T1+C", "T2"]
   model_scale: [[0, 6000], [0, 6000], [0, 6000]] # 对应模态的最小最大像素值，用于归一化
@@ -92,7 +93,7 @@ visualization:
       write_path: output_seg
   heatmap:
     GCM:
-      choose_image: "0002693285"
+      choose_image: "0001899404"
       write_path: output_slices
     GCNC:
       choose_image: "123841"

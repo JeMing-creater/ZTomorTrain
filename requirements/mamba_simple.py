@@ -122,7 +122,7 @@ class Mamba(nn.Module):
         self.D._no_weight_decay = True
 
         # bidirectional
-        assert bimamba_type == "v3"
+        # assert bimamba_type == "v3"
 
         A_b = repeat(
             torch.arange(1, self.d_state + 1, dtype=torch.float32, device=device),
@@ -284,6 +284,7 @@ class Mamba(nn.Module):
                     delta_bias=self.dt_proj.bias.float(),
                     delta_softplus=True,
                 )
+                keep_out = out
                 
                 out_b = mamba_inner_fn_no_out_proj(
                     xz.flip([-1]),
@@ -300,7 +301,12 @@ class Mamba(nn.Module):
                 )
                 # F.linear(rearrange(out_z, "b d l -> b l d"), out_proj_weight, out_proj_bias)
                 out = F.linear(rearrange(out + out_b.flip([-1]), "b d l -> b l d"), self.out_proj.weight, self.out_proj.bias)
+                
+                o_1 = out
+                o_2 = keep_out
+                o_3 = out_b
             else:
+                print("into v1")
                 out = mamba_inner_fn(
                     xz,
                     self.conv1d.weight,
@@ -316,7 +322,11 @@ class Mamba(nn.Module):
                     delta_bias=self.dt_proj.bias.float(),
                     delta_softplus=True,
                 )
+                o_1 = out
+                o_2 = out
+                o_3 = out
         else:
+            print("into else")
             x, z = xz.chunk(2, dim=1)
             # Compute short convolution
             if conv_state is not None:
@@ -359,6 +369,9 @@ class Mamba(nn.Module):
                 ssm_state.copy_(last_state)
             y = rearrange(y, "b d l -> b l d")
             out = self.out_proj(y)
+            o_1 = out
+            o_2 = out
+            o_3 = out
         return out, o_1, o_2, o_3
 
     def step(self, hidden_states, conv_state, ssm_state):
