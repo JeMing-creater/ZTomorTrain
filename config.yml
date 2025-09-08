@@ -65,7 +65,8 @@ GCNC_loader:
   # leapfrog: some data error can write in this list to remove from dataloader
   # leapfrog: ['0001902261', '0000439538','0002235469','0001308202']
   leapfrog: ['H32444']
-  root: /root/.cache/huggingface/forget/datasets/GZNC/
+  root: /mnt/liangjm/GCNC/
+  test_center: 3
   # checkModels: ["T1WI","T1WI+C","T2WI"]
   checkModels: ["T1", "T1+C", "T2"]
   model_scale: [[0, 6000], [0, 6000], [0, 6000]] # 对应模态的最小最大像素值，用于归一化

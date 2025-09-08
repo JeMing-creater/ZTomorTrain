@@ -614,7 +614,7 @@ if __name__ == "__main__":
     x = torch.randn(size=(2, 3, 128, 128, 64)).to(device)
     # test_x = torch.randn(size=(2, 64, 88, 88)).to(device)
 
-    model = HSL_Net(in_channels=3, out_channels=3, class_channels=1).to(device)
+    model = HSL_Net(in_channels=3, out_channels=3).to(device)
 
     CLS_out, SEG_out = model(x)
 

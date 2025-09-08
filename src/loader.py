@@ -148,12 +148,14 @@ def read_csv_for_GCM(config):
 
 def read_csv_for_GCNC(config):
 
-    csv_path1 = config.GCNC_loader.root + "/" + "NPC.xlsx"
+    csv_path1 = config.GCNC_loader.root + "/" + "NPC_new.xlsx"
 
     # 定义dtype转换，将第四列（索引为3）读作str
     dtype_converters = {3: str}
 
     df = pd.read_excel(csv_path1, engine="openpyxl", dtype=dtype_converters)
+    
+    
 
     # 创建空列表
     content_dict = {}
@@ -162,6 +164,11 @@ def read_csv_for_GCNC(config):
     for index, row in df.iterrows():
 
         key = str(row["ID"])
+        
+        #TODO: 中心3以0开头设计ID，ID需要特殊读取避免删0
+        if row["中心"] == 3:
+            key = key.zfill(10)
+        
         # TODO: 此处只做高低表达分类记录。后续数据补全可以添加阴阳性分类
         # 如果指标缺失，则跳过读取
         if isinstance(row["label"], (int, float)) != True:
@@ -214,10 +221,11 @@ def read_usedata(file_path):
 
 
 def load_MR_dataset_images(
-    root, use_data, use_models, use_data_dict={}, data_choose="GCM"
+    root, use_data, use_models, use_data_dict={}, data_choose="GCM", test_center=3
 ):
     images_path = os.listdir(root)
     images_list = []
+    test_images_list = []
     images_lack_list = []
 
     for path in use_data:
@@ -308,15 +316,26 @@ def load_MR_dataset_images(
         else:
             if lack_flag == False and lack_model_flag == False:
                 if use_data_dict != {}:
-                    images_list.append(
-                        {
-                            "image": image,
-                            "label": label,
-                            # "pdl1_label": use_data_dict[path]["PD-L1"],
-                            "m_label": use_data_dict[path]["M"],
-                            "center": use_data_dict[path]["center"],
-                        }
-                    )
+                    if use_data_dict[path]["center"] == test_center:
+                        test_images_list.append(
+                            {
+                                "image": image,
+                                "label": label,
+                                # "pdl1_label": use_data_dict[path]["PD-L1"],
+                                "m_label": use_data_dict[path]["M"],
+                                "center": use_data_dict[path]["center"],
+                            }
+                        )
+                    else:
+                        images_list.append(
+                            {
+                                "image": image,
+                                "label": label,
+                                # "pdl1_label": use_data_dict[path]["PD-L1"],
+                                "m_label": use_data_dict[path]["M"],
+                                "center": use_data_dict[path]["center"],
+                            }
+                        )
                 else:
                     images_list.append(
                         {
@@ -344,7 +363,10 @@ def load_MR_dataset_images(
                     )
         # print(f'{path} example has been loaded')
 
-    return images_list, images_lack_list
+    if data_choose == "GCM":
+        return images_list, images_lack_list
+    else:
+        return images_list, test_images_list, images_lack_list
 
 
 def load_brats2021_dataset_images(root):
@@ -914,24 +936,25 @@ def get_dataloader_GCNC(
     remove_list = config.GCNC_loader.leapfrog
     use_data = [item for item in use_data_list if item not in remove_list]
 
-    data, data_lack = load_MR_dataset_images(
-        datapath, use_data, use_models, content_dict, data_choose="GCNC"
+    data, test_data, data_lack = load_MR_dataset_images(
+        datapath, use_data, use_models, content_dict, data_choose="GCNC", test_center=config.GCNC_loader.test_center
     )
     load_transform, train_transform, val_transform = get_GCNC_transforms(config)
 
     if config.GCNC_loader.fix_example == True:
-        (train_data, val_data, test_data) = split_examples_to_data(
+        (train_data, val_data, _) = split_examples_to_data(
             data, config, lack_flag=False, loding=True
         )
     else:
         random.shuffle(data)
         print("Random Loading!")
-        train_data, val_data, test_data = split_list(
+        # TODO：使用第三中心数据作为测试，避免test数据划分
+        train_data, val_data, _ = split_list(
             data,
             [
                 config.GCNC_loader.train_ratio,
-                config.GCNC_loader.val_ratio,
-                config.GCNC_loader.test_ratio,
+                config.GCNC_loader.val_ratio + config.GCNC_loader.test_ratio,
+                0,
             ],
         )
 
@@ -1037,7 +1060,7 @@ def get_dataloader_BraTS(
 if __name__ == "__main__":
     config = EasyDict(
         yaml.load(
-            open("/workspace/Jeming/ZT_new/config.yml", "r", encoding="utf-8"),
+            open("/workspace/GZTumor/config.yml", "r", encoding="utf-8"),
             Loader=yaml.FullLoader,
         )
     )
@@ -1051,7 +1074,7 @@ if __name__ == "__main__":
     pd_l1_count = 0
     pd_l1_f_count = 0
 
-    for i, batch in enumerate(train_loader):
+    for i, batch in enumerate(test_loader):
         try:
             # print("pdl1_label: ")
             # print(batch["pdl1_label"])
@@ -1063,14 +1086,27 @@ if __name__ == "__main__":
             print(f"Error occurred while loading batch {i}: {e}")
             continue
         
-    for i, batch in enumerate(val_loader):
-        try:
-            # print("pdl1_label: ")
-            # print(batch["pdl1_label"])
-            print("m_label: ")
-            print(batch["m_label"])
-            print("center: ")
-            print(batch["center"])
-        except Exception as e:
-            print(f"Error occurred while loading batch {i}: {e}")
-            continue
+        
+    # for i, batch in enumerate(train_loader):
+    #     try:
+    #         # print("pdl1_label: ")
+    #         # print(batch["pdl1_label"])
+    #         print("m_label: ")
+    #         print(batch["m_label"])
+    #         print("center: ")
+    #         print(batch["center"])
+    #     except Exception as e:
+    #         print(f"Error occurred while loading batch {i}: {e}")
+    #         continue
+        
+    # for i, batch in enumerate(val_loader):
+    #     try:
+    #         # print("pdl1_label: ")
+    #         # print(batch["pdl1_label"])
+    #         print("m_label: ")
+    #         print(batch["m_label"])
+    #         print("center: ")
+    #         print(batch["center"])
+    #     except Exception as e:
+    #         print(f"Error occurred while loading batch {i}: {e}")
+    #         continue
