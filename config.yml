@@ -1,6 +1,6 @@
 trainer:
   choose_model: HSL_Net   # Class: [HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
-  task: Segmentation   # [Classification, Segmentation]
+  task: Classification   # [Classification, Segmentation]
   choose_dataset: GCNC   # [GCM, GCNC, BraTS]
   num_epochs: 300
   seg_epochs: 300
@@ -65,10 +65,10 @@ GCNC_loader:
   # leapfrog: some data error can write in this list to remove from dataloader
   # leapfrog: ['0001902261', '0000439538','0002235469','0001308202']
   leapfrog: ['H32444']
-  root: /mnt/liangjm/GCNC/
+  root: /root/.cache/huggingface/forget/datasets/GCNC/
   test_center: 3
-  # checkModels: ["T1WI","T1WI+C","T2WI"]
   checkModels: ["T1", "T1+C", "T2"]
+  # checkModels: ["T1", "T1+C"]
   model_scale: [[0, 6000], [0, 6000], [0, 6000]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
 
