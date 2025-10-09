@@ -4,7 +4,7 @@ trainer:
   choose_dataset: GCNC   # [GCM, GCNC, BraTS]
   num_epochs: 300
   seg_epochs: 300
-  warmup: 2
+  warmup: 2        
   batch_size: 2
   resume: True
   # lr: 0.001
@@ -20,7 +20,7 @@ finetune:
   GCM:
     checkpoint: None
   GCNC:
-    checkpoint: None
+    checkpoint: GCNC_ClassificationHSL_Net
   BraTS:
     checkpoint: None
 
@@ -89,7 +89,7 @@ visualization:
       choose_image: "0002693285"
       write_path: output_seg
     GCNC:
-      choose_image: "123841"
+      choose_image: "122570"
       write_path: output_seg
   heatmap:
     GCM:
