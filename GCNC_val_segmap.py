@@ -28,10 +28,13 @@ from matplotlib import cm
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter
 from src.optimizer import LinearWarmupCosineAnnealingLR
+from monai.transforms import SaveImage
+from monai.transforms import Compose, Activations, AsDiscrete, Resize, SaveImage
+from monai.transforms import LoadImaged, ResampleToMatchd, EnsureChannelFirstd
 
 from src import utils
-from src.loader import get_dataloader_GCM as get_dataloader
-from src.loader import get_GCM_transforms as get_transforms
+from src.loader import get_dataloader_GCNC as get_dataloader
+from src.loader import get_GCNC_transforms as get_transforms
 from src.utils import (
     Logger,
     write_example,
@@ -209,9 +212,9 @@ def disperse_segmentation_preserve_connectivity(
 def visualize_for_single(config, model, accelerator):
     model.eval()
     choose_image = (
-        config.GCM_loader.root
+        config.GCNC_loader.root
         + "/ALL/"
-        + f"{config.visualization.visual.GCM.choose_image}"
+        + f"{config.visualization.visual.GCNC.choose_image}"
     )
     accelerator.print("visualize for image: ", choose_image)
 
@@ -221,20 +224,20 @@ def visualize_for_single(config, model, accelerator):
     labels = []
     image_size = []
     affines = []
-    for i in range(len(config.GCM_loader.checkModels)):
+    for i in range(len(config.GCNC_loader.checkModels)):
         image_path = (
             choose_image
             + "/"
-            + config.GCM_loader.checkModels[i]
+            + config.GCNC_loader.checkModels[i]
             + "/"
-            + f"{config.visualization.visual.GCM.choose_image}.nii.gz"
+            + f"{config.visualization.visual.GCNC.choose_image}.nii.gz"
         )
         label_path = (
             choose_image
             + "/"
-            + config.GCM_loader.checkModels[i]
+            + config.GCNC_loader.checkModels[i]
             + "/"
-            + f"{config.visualization.visual.GCM.choose_image}seg.nii.gz"
+            + f"{config.visualization.visual.GCNC.choose_image}seg.nii.gz"
         )
 
         batch = load_transform[i]({"image": image_path, "label": label_path})
@@ -255,18 +258,25 @@ def visualize_for_single(config, model, accelerator):
             monai.transforms.AsDiscrete(threshold=0.5),
         ]
     )
-    # model = model.to(accelerator.device)
-    # _, img = model(image_tensor.to(accelerator.device))
-    # seg = post_trans(img[0])
+    model = model.to(accelerator.device)
+    
+    if "HSL_Net" in config.trainer.choose_model:
+        _, img = model(image_tensor.to(accelerator.device))
+    else:
+        img = model(image_tensor.to(accelerator.device))
+    seg = post_trans(img[0])
 
-    img = label_tensor.to(accelerator.device)
-    # img = disperse_segmentation_bcwhz(img, kernel_size=3, prob=2)
-    img = disperse_segmentation_preserve_connectivity(
-        img, kernel_size=3, prob_add=0.12, iterations=1, dep_epper=True, lonely_thresh=2
-    )
-    seg = img[0]
+    # img = label_tensor.to(accelerator.device)
+    
+    # img = disperse_segmentation_bcwhz(img, kernel_size=3, prob=0.15)
+    # img = disperse_segmentation_preserve_connectivity(
+    #     img, kernel_size=3, prob_add=0.05, iterations=1, dep_epper=True, lonely_thresh=2
+    # )
+    
+    # seg = img[0]
+    
 
-    for i in range(len(config.GCM_loader.checkModels)):
+    for i in range(len(config.GCNC_loader.checkModels)):
         # seg_now = monai.transforms.Resize(spatial_size=image_size[i], mode="nearest")(seg)
         seg_now = monai.transforms.Resize(
             spatial_size=image_size[i], mode=("nearest-exact")
@@ -277,22 +287,26 @@ def visualize_for_single(config, model, accelerator):
 
         seg_now = seg_now.cpu()
         seg_out[seg_now == 1] = 1
+        
+        seg_out = np.flip(seg_out, axis=0)  # 上下翻转
+        seg_out = np.flip(seg_out, axis=1)  # 左右翻转
+        
         res = nib.Nifti1Image(seg_out.astype(np.uint8), affine)
 
         save_path = (
-            config.visualization.visual.GCM.write_path
+            config.visualization.visual.GCNC.write_path
             + "/"
-            + f"{config.visualization.visual.GCM.choose_image}"
+            + f"{config.visualization.visual.GCNC.choose_image}"
             + "/"
-            + config.GCM_loader.checkModels[i]
+            + config.GCNC_loader.checkModels[i]
         )
         ensure_directory_exists(save_path)
         picture = nib.load(
             choose_image
             + "/"
-            + config.GCM_loader.checkModels[i]
+            + config.GCNC_loader.checkModels[i]
             + "/"
-            + f"{config.visualization.visual.GCM.choose_image}seg.nii.gz"
+            + f"{config.visualization.visual.GCNC.choose_image}seg.nii.gz"
         )
 
         qform = picture.get_qform()
@@ -300,7 +314,7 @@ def visualize_for_single(config, model, accelerator):
         sfrom = picture.get_sform()
         res.set_sform(sfrom)
 
-        original_str = f"{save_path}/{config.visualization.visual.GCM.choose_image}inference.nii.gz"
+        original_str = f"{save_path}/{config.visualization.visual.GCNC.choose_image}inference.nii.gz"
 
         print("save ", original_str)
         # 然后保存 NIFTI 图像
@@ -308,6 +322,9 @@ def visualize_for_single(config, model, accelerator):
             res,
             original_str,
         )
+
+
+
 
 
 def warm_up(
@@ -405,8 +422,8 @@ if __name__ == "__main__":
     )
     utils.same_seeds(50)
 
-    if config.finetune.GCM.checkpoint != "None":
-        checkpoint_name = config.finetune.GCM.checkpoint
+    if config.finetune.GCNC.checkpoint != "None":
+        checkpoint_name = config.finetune.GCNC.checkpoint
     else:
         checkpoint_name = (
             config.trainer.choose_dataset
@@ -438,7 +455,7 @@ if __name__ == "__main__":
 
     train_loader, val_loader, test_loader, example = get_dataloader(config)
     inference = monai.inferers.SlidingWindowInferer(
-        roi_size=config.GCM_loader.target_size,
+        roi_size=config.GCNC_loader.target_size,
         overlap=0.5,
         sw_device=accelerator.device,
         device=accelerator.device,
