@@ -18,7 +18,10 @@ from monai.networks.utils import one_hot
 sitk.ProcessObject.SetGlobalWarningDisplay(False)
 from typing import Tuple, List, Mapping, Hashable, Dict
 from monai.transforms import (
+    Compose,
+    LoadImage,
     LoadImaged,
+    EnsureTyped,
     MapTransform,
     ScaleIntensityRanged,
     EnsureChannelFirstd,
@@ -33,6 +36,7 @@ from monai.transforms import (
     ToTensord,
     RandScaleIntensityd,
     RandShiftIntensityd,
+    ScaleIntensityRangePercentilesd
 )
 
 
@@ -369,6 +373,43 @@ def load_MR_dataset_images(
         return images_list, test_images_list, images_lack_list
 
 
+def load_MR_tif_dataset_images(
+    root, use_data, use_models):
+    images_path = os.listdir(root)
+    images_list = []
+
+    for path in use_data:
+        path = str(path)
+        images = []
+        labels = []
+        
+        if path not in images_path:
+            print(f"{path} is not in {root}. ")
+            continue
+        
+        for modal in use_models:
+            image = []
+            label = []
+            
+            for img in os.listdir(root + "/" + path):
+                if (modal in img) and ("mask" not in img):
+                    image.append(root + "/" + path + "/" + img)
+                elif (modal in img) and ("mask" in img):
+                    label.append(root + "/" + path + "/" + img)
+            
+            images.append(image)
+            labels.append(label)
+            
+        images_list.append(
+            {
+                "image": images,
+                "label": labels
+            }
+        )
+        
+    return images_list
+        
+
 def load_brats2021_dataset_images(root):
     images_path = os.listdir(root)
     images_list = []
@@ -484,6 +525,54 @@ def get_GCNC_transforms(
         ]
     )
     return load_transform, train_transform, val_transform
+
+
+def get_FS_transforms(
+    config: EasyDict,
+) -> Tuple[monai.transforms.Compose, monai.transforms.Compose]:
+
+    train_transform = monai.transforms.Compose(
+        [
+            ReadAndStackPerModalityd(
+                keys=["image", "label"],
+                spatial_size=config.FS_loader.target_size,
+                image_mode="trilinear",   # 图像
+                label_mode="nearest",     # 标签
+                reader="PILReader",
+                image_keys=("image",),
+                label_keys=("label",),
+                dtype_image=torch.float32,
+                dtype_label=torch.float32,  # 若需要整数标签可改为 torch.long
+            ),
+            # 可选：强度归一化、插值、几何增强等放在这里（它们都支持 (C,H,W,D)）
+            EnsureTyped(keys=["image", "label"], dtype=torch.float32),
+            
+            # 训练集的额外增强
+            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
+            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
+            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
+            RandScaleIntensityd(keys="image", factors=0.1, prob=1.0),
+            RandShiftIntensityd(keys="image", offsets=0.1, prob=1.0),
+        ]
+    )
+    val_transform = monai.transforms.Compose(
+        [
+            ReadAndStackPerModalityd(
+                keys=["image", "label"],
+                spatial_size=config.FS_loader.target_size,
+                image_mode="trilinear",   # 图像
+                label_mode="nearest",     # 标签
+                reader="PILReader",
+                image_keys=("image",),
+                label_keys=("label",),
+                dtype_image=torch.float32,
+                dtype_label=torch.float32,  # 若需要整数标签可改为 torch.long
+            ),
+            # 可选：强度归一化、插值、几何增强等放在这里（它们都支持 (C,H,W,D)）
+            EnsureTyped(keys=["image", "label"], dtype=torch.float32),
+        ]
+    )
+    return train_transform, val_transform
 
 
 def get_Brats_transforms(
@@ -688,6 +777,123 @@ class MultiModalityDataset(monai.data.Dataset):
             return {"image": result["image"], "label": result["label"], "center": result["center"]}
 
 
+
+class ReadAndStackPerModalityd(MapTransform):
+    def __init__(
+        self,
+        keys,
+        spatial_size,                 # (w, h, z)
+        image_mode="trilinear",
+        label_mode="nearest",
+        reader="PILReader",
+        image_keys=("image",),
+        label_keys=("label",),
+        dtype_image=torch.float32,
+        dtype_label=torch.float32,
+        rgb_to_gray="mean",
+        allow_empty=False,
+    ):
+        super().__init__(keys)
+        self.loader = LoadImage(reader=reader, image_only=True)
+
+        self.tgt_w, self.tgt_h, self.tgt_z = spatial_size
+        self.size_2d = (self.tgt_h, self.tgt_w)             # 2D -> (H,W)
+        self.size_3d = (self.tgt_z, self.tgt_h, self.tgt_w)  # 3D -> (D,H,W)
+
+        self.image_mode = image_mode
+        self.label_mode = label_mode
+        self.image_keys = set(image_keys)
+        self.label_keys = set(label_keys)
+        self.dtype_image = dtype_image
+        self.dtype_label = dtype_label
+        self.rgb_to_gray = rgb_to_gray
+        self.allow_empty = allow_empty
+
+    @staticmethod
+    def _to_gray(arr, how="mean"):
+        if arr.ndim == 2:
+            return arr
+        if arr.ndim == 3:
+            if how == "mean":
+                return np.mean(arr, axis=2)
+            idx = {"r": 0, "g": 1, "b": 2}[how]
+            return arr[..., idx]
+        return np.squeeze(arr)
+
+    @torch.no_grad()
+    def _resize2d(self, im_hw: np.ndarray, use_nearest: bool) -> np.ndarray:
+        t = torch.from_numpy(im_hw).to(torch.float32).unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
+        mode = "nearest" if use_nearest else "bilinear"
+        kwargs = {"size": self.size_2d, "mode": mode}
+        if mode in ("bilinear", "bicubic"):
+            kwargs["align_corners"] = False
+        t = F.interpolate(t, **kwargs)
+        return t.squeeze(0).squeeze(0).cpu().numpy()
+
+    @torch.no_grad()
+    def _resize3d_dhw(self, vol_dhw: torch.Tensor, use_nearest: bool) -> torch.Tensor:
+        mode = "nearest" if use_nearest else "trilinear"
+        kwargs = {"size": self.size_3d, "mode": mode}
+        if mode == "trilinear":
+            kwargs["align_corners"] = False
+        return F.interpolate(vol_dhw, **kwargs)
+
+    def __call__(self, data):
+        d = dict(data)
+        for key in self.keys:
+            per_modality_paths = d[key]  # list[list[str]]
+
+            is_label = key in self.label_keys
+            use_nearest = True if is_label else False
+            out_dtype = self.dtype_label if is_label else self.dtype_image
+
+            vols_hwz = []
+            for mi, mod_paths in enumerate(per_modality_paths):
+                if (not mod_paths) and not self.allow_empty:
+                    raise ValueError(f"{key}[modality {mi}] has 0 slices.")
+
+                # 1) 每张切片读入 -> 灰度 -> 2D resize 到同一 (H,W)
+                resized_slices = []
+                for si, p in enumerate(mod_paths):
+                    arr = np.asarray(self.loader(p))
+                    arr = self._to_gray(arr, self.rgb_to_gray)
+                    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+                    arr = self._resize2d(arr, use_nearest=use_nearest)
+                    resized_slices.append(arr)
+
+                # 如果该模态没有切片，放一个全零占位
+                if len(resized_slices) == 0:
+                    vol_hwz = np.zeros((self.tgt_h, self.tgt_w, 1), dtype=np.float32)
+                else:
+                    # 2) 先 stack 成 (H,W,Zm)
+                    vol_hwz = np.stack(resized_slices, axis=2)  # (H,W,Zm)
+
+                    # 3) **在模态内部**统一到目标 Z： (H,W,Zm)->(1,1,Zm,H,W)->resize->(H,W,Zt)
+                    t = torch.from_numpy(vol_hwz.transpose(2, 0, 1)).unsqueeze(0).unsqueeze(0).to(torch.float32)  # (1,1,Zm,H,W)
+                    t = self._resize3d_dhw(t, use_nearest=use_nearest)  # (1,1,Zt,H,W)
+                    vol_hwz = t.squeeze(0).squeeze(0).permute(1, 2, 0).cpu().numpy()  # (H,W,Zt)
+
+                vols_hwz.append(vol_hwz)  # 每个元素现在都是同形状 (H,W,Zt)
+
+            # 4) 现在 Z 已经一致，可以安全 stack 成 (C,H,W,Z)
+            d[key] = np.stack(vols_hwz, axis=0).astype(np.float32)
+            # 5) 类型
+            if out_dtype != torch.float32:
+                d[key] = torch.from_numpy(d[key]).to(out_dtype).cpu().numpy()
+
+        return d
+
+    
+class TIFFDataset(monai.data.Dataset):
+    """
+    data: 形如 [{"image": [[...tif...],[...]], "label": [[...],[...]]}, ...]
+    transform: MONAI Compose；需要把输出变成 (C,H,W,Z) 并转为 tensor
+    """
+    def __init__(self, data, transform):
+        super().__init__(data=data, transform=transform)
+
+        
+
 def split_list(data, ratios):
     # 计算每个部分的大小
     sizes = [math.ceil(len(data) * r) for r in ratios]
@@ -708,10 +914,13 @@ def split_list(data, ratios):
     return parts
 
 
-def check_example(data):
+def check_example(data, tif=False):
     index = []
     for d in data:
-        num = d["image"][0].split("/")[-1].split(".")[0]
+        if tif != True:
+            num = d["image"][0].split("/")[-1].split(".")[0]
+        else:
+            num = d["image"][0][0].split("/")[-2]
         index.append(num)
     return index
 
@@ -762,9 +971,16 @@ def split_examples_to_data(data, config, lack_flag=False, loding=False):
             data_list = select_example_to_data(data, data_list)
         return data_list
 
-    train_example = config.GCM_loader.root + "/" + "train_examples.txt"
-    val_example = config.GCM_loader.root + "/" + "val_examples.txt"
-    test_example = config.GCM_loader.root + "/" + "test_examples.txt"
+    if config.trainer.choose_dataset == "GCM":
+        data_root = config.GCM_loader.root
+    elif config.trainer.choose_dataset == "GCNC":
+        data_root = config.GCNC_loader.root
+    elif config.trainer.choose_dataset == "FS":
+        data_root = config.FS_loader.root
+    
+    train_example = data_root + "/" + "train_examples.txt"
+    val_example = data_root + "/" + "val_examples.txt"
+    test_example = data_root + "/" + "test_examples.txt"
 
     train_data, val_data, test_data = (
         load_example_to_data(data, train_example, loding),
@@ -1026,6 +1242,94 @@ def get_dataloader_GCNC(
     )
 
 
+def get_dataloader_FS(
+    config: EasyDict,
+) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
+    root = config.FS_loader.root
+    datapath = root + "/" + "images" + "/"+ "imgs" + "/"
+    
+    use_data_list = [d for d in os.listdir(datapath) if os.path.isdir(os.path.join(datapath, d))]
+    remove_list = config.FS_loader.leapfrog
+    use_data = [item for item in use_data_list if item not in remove_list]
+    
+    data = load_MR_tif_dataset_images(
+        datapath, use_data, config.FS_loader.checkModels
+    )
+    
+    if config.FS_loader.fix_example == True:
+        (train_data, val_data, test_data) = split_examples_to_data(
+            data, config, lack_flag=False, loding=True
+        )
+    else:
+        random.shuffle(data)
+        print("Random Loading!")
+        # TODO：使用第三中心数据作为测试，避免test数据划分
+        train_data, val_data, test_data = split_list(
+            data,
+            [
+                config.FS_loader.train_ratio,
+                config.FS_loader.val_ratio,
+                config.FS_loader.test_ratio,
+            ],
+        )
+
+        if config.FS_loader.fusion == True:
+            need_val_data = val_data + test_data
+            val_data = need_val_data
+            test_data = need_val_data
+    
+    train_example = check_example(train_data, tif=True)
+    val_example = check_example(val_data, tif=True)
+    test_example = check_example(test_data, tif=True)
+    
+    
+    train_transform, val_transform = get_FS_transforms(config)
+    
+    
+    train_dataset = TIFFDataset(
+        data=train_data, transform=train_transform
+    )
+    
+    val_dataset = TIFFDataset(
+        data=val_data, transform=val_transform
+    )
+    
+    test_dataset = TIFFDataset(
+        data=test_data, transform=val_transform
+    )
+    
+    train_loader = monai.data.DataLoader(
+        train_dataset,
+        num_workers=config.FS_loader.num_workers,
+        batch_size=config.trainer.batch_size,
+        shuffle=True,
+    )
+    
+    
+    val_loader = monai.data.DataLoader(
+        val_dataset,
+        num_workers=config.FS_loader.num_workers,
+        batch_size=config.trainer.batch_size,
+        shuffle=False,
+    )
+    
+    test_loader = monai.data.DataLoader(
+        test_dataset,
+        num_workers=config.FS_loader.num_workers,
+        batch_size=config.trainer.batch_size,
+        shuffle=False,
+    )
+    
+    return (
+        train_loader,
+        val_loader,
+        test_loader,
+        (train_example, val_example, test_example),
+    )
+    
+    
+    
+
 def get_dataloader_BraTS(
     config: EasyDict,
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
@@ -1066,7 +1370,8 @@ if __name__ == "__main__":
     )
 
     # train_loader, val_loader, test_loader, _ = get_dataloader_GCM(config)
-    train_loader, val_loader, test_loader, _ = get_dataloader_GCNC(config)
+    # train_loader, val_loader, test_loader, _ = get_dataloader_GCNC(config)
+    train_loader, val_loader, test_loader, _ = get_dataloader_FS(config)
 
     conut = 0
     f_count = 0
@@ -1074,39 +1379,38 @@ if __name__ == "__main__":
     pd_l1_count = 0
     pd_l1_f_count = 0
 
-    for i, batch in enumerate(test_loader):
+    count = 0
+    for i, batch in enumerate(train_loader):
         try:
-            # print("pdl1_label: ")
-            # print(batch["pdl1_label"])
-            print("m_label: ")
-            print(batch["m_label"])
-            print("center: ")
-            print(batch["center"])
+            # print(batch["image"].shape)
+            # print(batch["label"].shape)
+            count += 1
         except Exception as e:
             print(f"Error occurred while loading batch {i}: {e}")
             continue
-        
-        
-    # for i, batch in enumerate(train_loader):
-    #     try:
-    #         # print("pdl1_label: ")
-    #         # print(batch["pdl1_label"])
-    #         print("m_label: ")
-    #         print(batch["m_label"])
-    #         print("center: ")
-    #         print(batch["center"])
-    #     except Exception as e:
-    #         print(f"Error occurred while loading batch {i}: {e}")
-    #         continue
-        
-    # for i, batch in enumerate(val_loader):
-    #     try:
-    #         # print("pdl1_label: ")
-    #         # print(batch["pdl1_label"])
-    #         print("m_label: ")
-    #         print(batch["m_label"])
-    #         print("center: ")
-    #         print(batch["center"])
-    #     except Exception as e:
-    #         print(f"Error occurred while loading batch {i}: {e}")
-    #         continue
+    
+    print(f"Total train batches: {count}")    
+      
+    count = 0    
+    for i, batch in enumerate(val_loader):
+        try:
+            # print(batch["image"].shape)
+            # print(batch["label"].shape)
+            count += 1
+        except Exception as e:
+            print(f"Error occurred while loading batch {i}: {e}")
+            continue
+    
+    print(f"Total val batches: {count}")  
+    
+    count = 0    
+    for i, batch in enumerate(test_loader):
+        try:
+            # print(batch["image"].shape)
+            # print(batch["label"].shape)
+            count += 1
+        except Exception as e:
+            print(f"Error occurred while loading batch {i}: {e}")
+            continue
+
+    print(f"Total test batches: {count}")  

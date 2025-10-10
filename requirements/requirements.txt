@@ -13,6 +13,7 @@ openpyxl
 tqdm
 termcolor
 scikit-learn
+scikit-image
 pandas
 einops
 ninja
