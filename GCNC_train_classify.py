@@ -263,7 +263,7 @@ if __name__ == "__main__":
 
     # keep example log
     if accelerator.is_main_process == True:
-        write_example(example, logging_dir)
+        write_example(config, example)
 
     inference = monai.inferers.SlidingWindowInferer(
         roi_size=config.GCNC_loader.target_size,

@@ -3,7 +3,6 @@ import sys
 from datetime import datetime
 from typing import Dict
 
-
 import monai
 import torch
 import yaml
@@ -13,12 +12,20 @@ from easydict import EasyDict
 from monai.utils import ensure_tuple_rep
 from objprint import objstr
 from timm.optim import optim_factory
+from accelerate.utils import DistributedDataParallelKwargs
 
 from src import utils
-from src.loader import get_dataloader_GCM as get_dataloader
+from src.loader import get_dataloader_FS as get_dataloader
 from src.optimizer import LinearWarmupCosineAnnealingLR
-from src.utils import Logger, resume_train_state, write_example
+from src.utils import (
+    Logger,
+    resume_train_state,
+    write_example,
+    load_model_dict,
+    freeze_encoder_class,
+)
 
+# from src.model.HWAUNETR_seg import HWAUNETR as FMUNETR_seg
 from get_model import get_model
 
 
@@ -33,11 +40,17 @@ def train_one_epoch(
     accelerator: Accelerator,
     epoch: int,
     step: int,
+    config: EasyDict,
 ):
     # 训练
     model.train()
+    if config.trainer.choose_model == "HSL_Net":
+        freeze_encoder_class(model)
     for i, image_batch in enumerate(train_loader):
-        logits = model(image_batch["image"])
+        if config.trainer.choose_model == "HSL_Net":
+            _, logits = model(image_batch["image"])
+        else:
+            logits = model(image_batch["image"])
         total_loss = 0
         log = ""
         for name in loss_functions:
@@ -51,9 +64,9 @@ def train_one_epoch(
         accelerator.backward(total_loss)
         optimizer.step()
         optimizer.zero_grad()
-        for name, param in model.named_parameters():
-            if param.grad is None:
-                print(name)
+        # for name, param in model.named_parameters():
+        #     if param.grad is None:
+        #         print(name)
         accelerator.log(
             {
                 "Train/Total Loss": float(total_loss),
@@ -71,14 +84,14 @@ def train_one_epoch(
         batch_acc = metrics[metric_name].aggregate()[0].to(accelerator.device)
         if accelerator.num_processes > 1:
             batch_acc = accelerator.reduce(batch_acc) / accelerator.num_processes
-        metric_dice = {}
-        metric_dice[f"Train/mean {metric_name}"] = float(batch_acc.mean())
-        for i in range(len(config.GCM_loader.checkModels)):
-            metric_dice[f"Train/ {config.GCM_loader.checkModels[i]}"] = float(
-                batch_acc[i]
-            )
-        metric.update(metric_dice)
-
+        metric.update(
+            {
+                f"Train/mean {metric_name}": float(batch_acc.mean()),
+                f"Train/Object1 {metric_name}": float(batch_acc[0]),
+                f"Train/Object2 {metric_name}": float(batch_acc[1]),
+                f"Train/Object3 {metric_name}": float(batch_acc[2]),
+            }
+        )
     accelerator.log(metric, step=epoch)
     return step
 
@@ -92,6 +105,7 @@ def val_one_epoch(
     step: int,
     post_trans: monai.transforms.Compose,
     accelerator: Accelerator,
+    config: EasyDict,
     test: bool = False,
 ):
     # 验证
@@ -101,7 +115,11 @@ def val_one_epoch(
     hd95_acc = 0
     hd95_class = []
     for i, image_batch in enumerate(val_loader):
-        logits = inference(image_batch["image"], model)
+        if config.trainer.choose_model == "HSL_Net":
+            _, logits = model(image_batch["image"])
+        else:
+            logits = model(image_batch["image"])
+        # logits = inference(image_batch["image"], model)
         val_outputs = post_trans(logits)
         for metric_name in metrics:
             metrics[metric_name](y_pred=val_outputs, y=image_batch["label"])
@@ -117,28 +135,36 @@ def val_one_epoch(
         flag = "Val"
     for metric_name in metrics:
         batch_acc = metrics[metric_name].aggregate()[0].to(accelerator.device)
+
         if accelerator.num_processes > 1:
             batch_acc = accelerator.reduce(batch_acc) / accelerator.num_processes
         metrics[metric_name].reset()
-        metric_dice = {}
-        metric_dice[f"{flag}/mean {metric_name}"] = float(batch_acc.mean())
-        for i in range(len(config.GCM_loader.checkModels)):
-            metric_dice[f"{flag}/ {config.GCM_loader.checkModels[i]}"] = float(
-                batch_acc[i]
-            )
-        metric.update(metric_dice)
-
         if metric_name == "dice_metric":
+            metric.update(
+                {
+                    f"{flag}/mean {metric_name}": float(batch_acc.mean()),
+                    f"{flag}/Object1 {metric_name}": float(batch_acc[0]),
+                    f"{flag}/Object2 {metric_name}": float(batch_acc[1]),
+                    f"{flag}/Object3 {metric_name}": float(batch_acc[2]),
+                }
+            )
             dice_acc = torch.Tensor([metric[f"{flag}/mean dice_metric"]]).to(
                 accelerator.device
             )
             dice_class = batch_acc
         else:
+            metric.update(
+                {
+                    f"{flag}/mean {metric_name}": float(batch_acc.mean()),
+                    f"{flag}/Object1 {metric_name}": float(batch_acc[0]),
+                    f"{flag}/Object2 {metric_name}": float(batch_acc[1]),
+                    f"{flag}/Object3 {metric_name}": float(batch_acc[2]),
+                }
+            )
             hd95_acc = torch.Tensor([metric[f"{flag}/mean hd95_metric"]]).to(
                 accelerator.device
             )
             hd95_class = batch_acc
-
     accelerator.log(metric, step=epoch)
     return dice_acc, dice_class, hd95_acc, hd95_class, step
 
@@ -149,8 +175,8 @@ if __name__ == "__main__":
     )
     utils.same_seeds(50)
 
-    if config.finetune.GCM.checkpoint != "None":
-        checkpoint_name = config.finetune.GCM.checkpoint
+    if config.finetune.FS.checkpoint != "None":
+        checkpoint_name = config.finetune.FS.checkpoint
     else:
         checkpoint_name = (
             config.trainer.choose_dataset
@@ -171,9 +197,14 @@ if __name__ == "__main__":
     )
 
     accelerator = Accelerator(
-        cpu=False, log_with=["tensorboard"], project_dir=logging_dir
+        kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)],
+        cpu=False,
+        log_with=["tensorboard"],
+        project_dir=logging_dir,
     )
+
     Logger(logging_dir if accelerator.is_local_main_process else None)
+
     accelerator.init_trackers(os.path.split(__file__)[-1].split(".")[0])
     accelerator.print(objstr(config))
 
@@ -188,7 +219,7 @@ if __name__ == "__main__":
         write_example(config, example)
 
     inference = monai.inferers.SlidingWindowInferer(
-        roi_size=config.GCM_loader.target_size,
+        roi_size=config.FS_loader.target_size,
         overlap=0.5,
         sw_device=accelerator.device,
         device=accelerator.device,
@@ -250,6 +281,12 @@ if __name__ == "__main__":
     best_test_metrics = []
     best_test_hd95_metrics = []
 
+    model, optimizer, scheduler, train_loader, val_loader, test_loader = (
+        accelerator.prepare(
+            model, optimizer, scheduler, train_loader, val_loader, test_loader
+        )
+    )
+
     if config.trainer.resume:
         (
             model,
@@ -275,12 +312,6 @@ if __name__ == "__main__":
         )
         val_step = train_step
 
-    model, optimizer, scheduler, train_loader, val_loader, test_loader = (
-        accelerator.prepare(
-            model, optimizer, scheduler, train_loader, val_loader, test_loader
-        )
-    )
-
     best_score = torch.Tensor([best_score]).to(accelerator.device)
     best_hd95 = torch.Tensor([best_hd95]).to(accelerator.device)
     for epoch in range(starting_epoch, config.trainer.num_epochs):
@@ -295,8 +326,8 @@ if __name__ == "__main__":
             accelerator,
             epoch,
             train_step,
+            config,
         )
-
         dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
             model,
             inference,
@@ -305,9 +336,9 @@ if __name__ == "__main__":
             val_step,
             post_trans,
             accelerator,
+            config,
             test=False,
         )
-
         # 保存模型
         if dice_acc > best_score:
             accelerator.save_state(
@@ -317,7 +348,7 @@ if __name__ == "__main__":
             best_metrics = dice_class
             best_hd95 = hd95_acc
 
-            if config.GCM_loader.fusion:
+            if config.FS_loader.fusion != True:
                 # 记录最优test acc
                 (
                     best_test_score,
@@ -333,6 +364,7 @@ if __name__ == "__main__":
                     -1,
                     post_trans,
                     accelerator,
+                    config,
                     test=True,
                 )
             else:
@@ -351,7 +383,6 @@ if __name__ == "__main__":
         accelerator.save_state(
             output_dir=f"{os.getcwd()}/model_store/{checkpoint_name}/checkpoint"
         )
-
         torch.save(
             {
                 "epoch": epoch,

@@ -497,39 +497,47 @@ def split_metrics(channels, metrics_template):
     return metrics_list
 
 
-def write_example(example, log_dir):
-    with open(log_dir + "/" + "train_examples.txt", "w") as file:
+def write_example(config, example):
+    
+    if config.trainer.choose_dataset == "GCM":
+        data_root = config.GCM_loader.root
+    elif config.trainer.choose_dataset == "GCNC":
+        data_root = config.GCNC_loader.root
+    elif config.trainer.choose_dataset == "FS":
+        data_root = config.FS_loader.root
+    
+    with open(data_root + "/" + "train_examples.txt", "w") as file:
         # 遍历列表中的每个字符串
         for item in example[0]:
             # 将每个元素写入文件，每个字符串占一行
             file.write(item + "\n")
 
-    with open(log_dir + "/" + "val_examples.txt", "w") as file:
+    with open(data_root + "/" + "val_examples.txt", "w") as file:
         # 遍历列表中的每个字符串
         for item in example[1]:
             # 将每个元素写入文件，每个字符串占一行
             file.write(item + "\n")
 
-    with open(log_dir + "/" + "test_examples.txt", "w") as file:
+    with open(data_root + "/" + "test_examples.txt", "w") as file:
         # 遍历列表中的每个字符串
         for item in example[2]:
             # 将每个元素写入文件，每个字符串占一行
             file.write(item + "\n")
 
     if len(example) == 6:
-        with open(log_dir + "/" + "train_lack_example.txt", "w") as file:
+        with open(data_root + "/" + "train_lack_example.txt", "w") as file:
             # 遍历列表中的每个字符串
             for item in example[3]:
                 # 将每个元素写入文件，每个字符串占一行
                 file.write(item + "\n")
 
-        with open(log_dir + "/" + "val_lack_example.txt", "w") as file:
+        with open(data_root + "/" + "val_lack_example.txt", "w") as file:
             # 遍历列表中的每个字符串
             for item in example[4]:
                 # 将每个元素写入文件，每个字符串占一行
                 file.write(item + "\n")
 
-        with open(log_dir + "/" + "test_lack_example.txt", "w") as file:
+        with open(data_root + "/" + "test_lack_example.txt", "w") as file:
             # 遍历列表中的每个字符串
             for item in example[5]:
                 # 将每个元素写入文件，每个字符串占一行

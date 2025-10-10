@@ -1,7 +1,7 @@
 trainer:
   choose_model: HSL_Net   # Class: [HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
   task: Classification   # [Classification, Segmentation]
-  choose_dataset: GCNC   # [GCM, GCNC, BraTS]
+  choose_dataset: FS   # [GCM, GCNC, FS, BraTS]
   num_epochs: 300
   seg_epochs: 300
   warmup: 2        
@@ -21,6 +21,8 @@ finetune:
     checkpoint: None
   GCNC:
     checkpoint: GCNC_ClassificationHSL_Net
+  FS:
+    checkpoint: None
   BraTS:
     checkpoint: None
 
@@ -71,6 +73,19 @@ GCNC_loader:
   # checkModels: ["T1", "T1+C"]
   model_scale: [[0, 6000], [0, 6000], [0, 6000]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
+
+FS_loader:
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+  fusion: False
+  num_workers: 0
+  fix_example: False
+  leapfrog: ['H32444']
+  root: /mnt/liangjm/FS/
+  checkModels: ["T2WI", "T1WI", "CE-T1WI"]
+  target_size: [128, 128, 64]
+
 
 BraTS_loader:
   train_ratio: 0.8

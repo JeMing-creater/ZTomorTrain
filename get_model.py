@@ -13,6 +13,8 @@ def get_model(config):
         use_config = config.GCM_loader
     elif config.trainer.choose_dataset == "GCNC":
         use_config = config.GCNC_loader
+    elif config.trainer.choose_dataset == "FS":
+        use_config = config.FS_loader
     
     # Multitask choose model will return first
     if "HSL_Net" in config.trainer.choose_model:
