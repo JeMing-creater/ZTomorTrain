@@ -53,9 +53,15 @@ def train_one_epoch(
             logits = model(image_batch["image"])
         total_loss = 0
         log = ""
+        
         for name in loss_functions:
             alpth = 1
             loss = loss_functions[name](logits, image_batch["label"])
+            
+            if torch.isnan(loss) or torch.isinf(loss) or loss < 0:
+                print(f"⚠️ {loss_functions[name]} detected:", loss.item())
+                loss = torch.abs(loss)
+            
             accelerator.log({"Train/" + name: float(loss)}, step=step)
             total_loss += alpth * loss
         val_outputs = post_trans(logits)

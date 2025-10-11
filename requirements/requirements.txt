@@ -6,6 +6,11 @@ tensorboard
 easydict
 SimpleITK
 monai
+itk
+pydicom
+pylibjpeg
+pylibjpeg-libjpeg
+pylibjpeg-openjpeg
 nibabel
 pyyaml
 opencv-python
