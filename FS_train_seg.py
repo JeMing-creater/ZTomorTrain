@@ -19,6 +19,7 @@ from src.loader import get_dataloader_FS as get_dataloader
 from src.optimizer import LinearWarmupCosineAnnealingLR
 from src.utils import (
     Logger,
+    reload_pre_train_model,
     resume_train_state,
     write_example,
     load_model_dict,
@@ -217,6 +218,10 @@ if __name__ == "__main__":
     accelerator.print("load model...")
     model = get_model(config)
 
+    
+    if config.trainer.choose_model == "HSL_Net":
+        reload_pre_train_model(model, accelerator, "HSL_Net_FS_Seg")
+    
     accelerator.print("load dataset...")
     train_loader, val_loader, test_loader, example = get_dataloader(config)
 
