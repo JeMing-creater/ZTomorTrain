@@ -1,7 +1,7 @@
 trainer:
-  choose_model: HSL_Net   # Class: [HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
-  task: Segmentation   # [Classification, Segmentation]
-  choose_dataset: FS   # [GCM, GCNC, FS, BraTS]
+  choose_model: ResNet   # Class: [HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
+  task: Classification   # [Classification, Segmentation]
+  choose_dataset: GCNC   # [GCM, GCNC, FS, BraTS]
   num_epochs: 300
   seg_epochs: 300
   warmup: 2        
@@ -20,7 +20,7 @@ finetune:
   GCM:
     checkpoint: None
   GCNC:
-    checkpoint: GCNC_ClassificationHSL_Net
+    checkpoint: None
   FS:
     checkpoint: None
   BraTS:
