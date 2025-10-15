@@ -61,7 +61,7 @@ GCNC_loader:
   fusion: False
   num_workers: 0
   # use this flag can fix experiment examples, must set train_example.txt, val_example.txt and test_example.txt to root.
-  fix_example: False
+  fix_example: True
   over_label: False
   over_add: 10
   # leapfrog: some data error can write in this list to remove from dataloader

@@ -415,7 +415,7 @@ if __name__ == "__main__":
                 best_test_metrics = final_metrics
 
         accelerator.print(
-            f'Epoch [{epoch+1}/{config.trainer.num_epochs}] now train acc: {train_metric["Train/accuracy"]}, now val acc: {val_top}, best acc: {best_accuracy}, best test acc: {best_test_accuracy}'
+            f'Epoch [{epoch+1}/{config.trainer.num_epochs}] now train acc: {train_metric["Train/accuracy"]}, now val acc: {val_top},  best acc: {best_accuracy}, best metrice: {best_metrics}, best test acc: {best_test_accuracy}, best test metrice: {best_test_metrics}'
         )
 
         accelerator.print("Cheakpoint...")
