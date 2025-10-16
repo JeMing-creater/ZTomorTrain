@@ -16,6 +16,7 @@ import torch.nn.functional as F
 from monai.utils import ensure_tuple_rep
 from monai.networks.utils import one_hot
 from typing import List, Dict, Any
+
 sitk.ProcessObject.SetGlobalWarningDisplay(False)
 from typing import Tuple, List, Mapping, Hashable, Dict
 from monai.transforms import (
@@ -33,15 +34,15 @@ from monai.transforms import (
     ResampleToMatchd,
     ResizeWithPadOrCropd,
     Resize,
-    ConcatItemsd, 
-    DeleteItemsd, 
+    ConcatItemsd,
+    DeleteItemsd,
     Resized,
     RandFlipd,
     NormalizeIntensityd,
     ToTensord,
     RandScaleIntensityd,
     RandShiftIntensityd,
-    ScaleIntensityRangePercentilesd
+    ScaleIntensityRangePercentilesd,
 )
 
 
@@ -116,6 +117,7 @@ class SafeLoadDICOMd(MapTransform):
 
     用法：放在 Compose 最前面，对应 keys 为 DICOM 的键（每个值是 list[str]）。
     """
+
     def __init__(self, keys):
         super().__init__(keys)
 
@@ -132,7 +134,9 @@ class SafeLoadDICOMd(MapTransform):
             try:
                 sitk_img = reader.Execute()  # SimpleITK.Image
             except Exception as e:
-                raise RuntimeError(f"SimpleITK failed to read DICOM series for key '{key}'.") from e
+                raise RuntimeError(
+                    f"SimpleITK failed to read DICOM series for key '{key}'."
+                ) from e
 
             # SimpleITK: GetArrayFromImage -> (Z, Y, X)
             arr_zyx = sitk.GetArrayFromImage(sitk_img)
@@ -140,9 +144,9 @@ class SafeLoadDICOMd(MapTransform):
             arr_hwz = np.transpose(arr_zyx, (1, 2, 0))
 
             # 提取元信息
-            spacing_xyz = sitk_img.GetSpacing()     # (sx, sy, sz) in X,Y,Z
-            origin_xyz  = sitk_img.GetOrigin()      # (ox, oy, oz)
-            direction   = sitk_img.GetDirection()   # len=9 (3x3) 或 16 (4x4)
+            spacing_xyz = sitk_img.GetSpacing()  # (sx, sy, sz) in X,Y,Z
+            origin_xyz = sitk_img.GetOrigin()  # (ox, oy, oz)
+            direction = sitk_img.GetDirection()  # len=9 (3x3) 或 16 (4x4)
 
             # 构造 4x4 affine：R * diag(spacing) 作为旋转缩放，origin 作为平移
             if len(direction) == 9:
@@ -155,7 +159,7 @@ class SafeLoadDICOMd(MapTransform):
             S = np.diag(spacing_xyz)  # diag(sx, sy, sz)
             A = np.eye(4, dtype=np.float64)
             A[:3, :3] = R @ S
-            A[:3,  3] = np.array(origin_xyz, dtype=np.float64)
+            A[:3, 3] = np.array(origin_xyz, dtype=np.float64)
 
             # 写回数据与 meta
             d[key] = arr_hwz  # (H, W, Z)
@@ -163,7 +167,7 @@ class SafeLoadDICOMd(MapTransform):
                 "spacing": spacing_xyz,
                 "direction": tuple(direction),
                 "origin": origin_xyz,
-                "affine": A,                       # 提供 affine，利于 Orientationd/Spacingd
+                "affine": A,  # 提供 affine，利于 Orientationd/Spacingd
                 "original_channel_dim": "no_channel",
             }
         return d
@@ -174,7 +178,10 @@ class AssertPairAlignedd(MapTransform):
     在 ConcatItemsd 之前调用：
     对每个模态的 (img_key, lab_key) 检查 shape/spacing/direction/affine 是否对齐。
     """
-    def __init__(self, img_keys, lab_keys, atol_spacing=1e-4, atol_affine=1e-3, atol_dir=1e-4):
+
+    def __init__(
+        self, img_keys, lab_keys, atol_spacing=1e-4, atol_affine=1e-3, atol_dir=1e-4
+    ):
         super().__init__(img_keys + lab_keys)
         assert len(img_keys) == len(lab_keys)
         self.img_keys = img_keys
@@ -190,7 +197,9 @@ class AssertPairAlignedd(MapTransform):
             ishape = np.array(d[ik].shape, dtype=int)
             lshape = np.array(d[lk].shape, dtype=int)
             if not np.array_equal(ishape, lshape):
-                raise ValueError(f"Shape mismatch between {ik} and {lk}: {tuple(ishape)} vs {tuple(lshape)}")
+                raise ValueError(
+                    f"Shape mismatch between {ik} and {lk}: {tuple(ishape)} vs {tuple(lshape)}"
+                )
 
             # meta
             im = d.get(f"{ik}_meta_dict", {}) or {}
@@ -199,27 +208,41 @@ class AssertPairAlignedd(MapTransform):
             # spacing
             isp = np.array(im.get("spacing", ()), dtype=float)
             lsp = np.array(lm.get("spacing", ()), dtype=float)
-            if isp.size and lsp.size and not np.allclose(isp, lsp, atol=self.atol_spacing, rtol=0):
-                raise ValueError(f"Spacing mismatch between {ik} and {lk}: {isp} vs {lsp}")
+            if (
+                isp.size
+                and lsp.size
+                and not np.allclose(isp, lsp, atol=self.atol_spacing, rtol=0)
+            ):
+                raise ValueError(
+                    f"Spacing mismatch between {ik} and {lk}: {isp} vs {lsp}"
+                )
 
             # direction（方向余弦长度可能是9或16，统一到3x3）
             def _dir_to_3x3(md):
                 direction = np.array(md.get("direction", ()), dtype=float)
                 if direction.size == 9:
-                    return direction.reshape(3,3)
+                    return direction.reshape(3, 3)
                 if direction.size == 16:
-                    return direction.reshape(4,4)[:3,:3]
+                    return direction.reshape(4, 4)[:3, :3]
                 return None
 
             idr = _dir_to_3x3(im)
             ldr = _dir_to_3x3(lm)
-            if idr is not None and ldr is not None and not np.allclose(idr, ldr, atol=self.atol_dir, rtol=0):
+            if (
+                idr is not None
+                and ldr is not None
+                and not np.allclose(idr, ldr, atol=self.atol_dir, rtol=0)
+            ):
                 raise ValueError(f"Direction mismatch between {ik} and {lk}")
 
             # affine（若都有就比）
             ia = np.array(im.get("affine", ()), dtype=float)
             la = np.array(lm.get("affine", ()), dtype=float)
-            if ia.size and la.size and not np.allclose(ia, la, atol=self.atol_affine, rtol=0):
+            if (
+                ia.size
+                and la.size
+                and not np.allclose(ia, la, atol=self.atol_affine, rtol=0)
+            ):
                 raise ValueError(f"Affine mismatch between {ik} and {lk}")
         return d
 
@@ -227,7 +250,7 @@ class AssertPairAlignedd(MapTransform):
 def sort_dcm_paths(paths):
     def extract_number(filename):
         # 提取文件名中的数字部分
-        match = re.search(r'(\d+)\.dcm$', filename)
+        match = re.search(r"(\d+)\.dcm$", filename)
         return int(match.group(1)) if match else -1
 
     return sorted(paths, key=extract_number)
@@ -291,8 +314,6 @@ def read_csv_for_GCNC(config):
     dtype_converters = {3: str}
 
     df = pd.read_excel(csv_path1, engine="openpyxl", dtype=dtype_converters)
-    
-    
 
     # 创建空列表
     content_dict = {}
@@ -301,11 +322,11 @@ def read_csv_for_GCNC(config):
     for index, row in df.iterrows():
 
         key = str(row["ID"])
-        
-        #TODO: 中心3以0开头设计ID，ID需要特殊读取避免删0
+
+        # TODO: 中心3以0开头设计ID，ID需要特殊读取避免删0
         if row["中心"] == 3:
             key = key.zfill(10)
-        
+
         # TODO: 此处只做高低表达分类记录。后续数据补全可以添加阴阳性分类
         # 如果指标缺失，则跳过读取
         if isinstance(row["label"], (int, float)) != True:
@@ -337,7 +358,7 @@ def read_csv_for_GCNC(config):
 
         label_dict["center"] = row["中心"]
 
-        if  label_dict["M"] != -1:
+        if label_dict["M"] != -1:
             content_dict[key] = label_dict
         else:
             print(f"{key} miss label")
@@ -506,8 +527,7 @@ def load_MR_dataset_images(
         return images_list, test_images_list, images_lack_list
 
 
-def load_MR_tif_dataset_images(
-    root, use_data, use_models):
+def load_MR_tif_dataset_images(root, use_data, use_models):
     images_path = os.listdir(root)
     images_list = []
 
@@ -515,33 +535,28 @@ def load_MR_tif_dataset_images(
         path = str(path)
         images = []
         labels = []
-        
+
         if path not in images_path:
             print(f"{path} is not in {root}. ")
             continue
-        
+
         for modal in use_models:
             image = []
             label = []
-            
+
             for img in os.listdir(root + "/" + path):
                 if (modal in img) and ("mask" not in img):
                     image.append(root + "/" + path + "/" + img)
                 elif (modal in img) and ("mask" in img):
                     label.append(root + "/" + path + "/" + img)
-            
+
             images.append(image)
             labels.append(label)
-            
-        images_list.append(
-            {
-                "image": images,
-                "label": labels
-            }
-        )
-        
+
+        images_list.append({"image": images, "label": labels})
+
     return images_list
-        
+
 
 def load_MR_dcm_dataset_images(root, use_data, use_models):
     images_path = os.listdir(root)
@@ -550,42 +565,35 @@ def load_MR_dcm_dataset_images(root, use_data, use_models):
         path = str(path)
         images = {}
         labels = {}
-        
+
         if path not in images_path:
             print(f"{path} is not in {root}. ")
             continue
-        
+
         for modal in use_models:
             image = []
             label = []
-            
+
             if "CE-T1" in modal:
                 label_flag = "ROI-CE-T1"
             elif "T2" in modal:
                 label_flag = "ROI-T2"
             else:
                 label_flag = "ROI-T1"
-            
-            for img in os.listdir(root + "/" + path + "/" +  modal):
+
+            for img in os.listdir(root + "/" + path + "/" + modal):
                 image.append(root + "/" + path + "/" + modal + "/" + img)
-            
-            image = sort_dcm_paths(image) # 将dcm文件按数字顺序排序
-                
+
+            image = sort_dcm_paths(image)  # 将dcm文件按数字顺序排序
+
             images[modal] = image
-            labels[modal] = root + "/" + path +  "/" + label_flag + ".nii" 
-        
-        
-        
-        images_list.append(
-            {
-                "image": images,
-                "label": labels
-            }
-        )
-        
-    return images_list       
- 
-                    
+            labels[modal] = root + "/" + path + "/" + label_flag + ".nii"
+
+        images_list.append({"image": images, "label": labels})
+
+    return images_list
+
+
 def load_brats2021_dataset_images(root):
     images_path = os.listdir(root)
     images_list = []
@@ -703,54 +711,54 @@ def get_GCNC_transforms(
     return load_transform, train_transform, val_transform
 
 
-
 def get_FS_transforms(
     modalities,
     target_spacing=(1.0, 1.0, 1.0),
-    target_size=(256, 256, 64),         # (W,H,Z)
+    target_size=(256, 256, 64),  # (W,H,Z)
     dtype_image=torch.float32,
-    dtype_label=torch.float32,              # True => 含 Rand* 增强
+    dtype_label=torch.float32,  # True => 含 Rand* 增强
     orientation_axcodes="RAS",
-)-> Tuple[monai.transforms.Compose, monai.transforms.Compose]:
-    
+) -> Tuple[monai.transforms.Compose, monai.transforms.Compose]:
+
     img_keys = [f"img_{m}" for m in modalities]
     lab_keys = [f"lab_{m}" for m in modalities]
     pairs = list(zip(img_keys, lab_keys))
 
     # —— 共同的“确定性预处理” ——（读、对齐、重采样、尺寸统一、对齐断言、拼接）
     deterministic = [
-        SafeLoadDICOMd(keys=img_keys),                                   # DICOM 用 SimpleITK 读取 + meta
+        SafeLoadDICOMd(keys=img_keys),  # DICOM 用 SimpleITK 读取 + meta
         LoadImaged(keys=lab_keys, reader="NibabelReader", image_only=True),  # NIfTI
-
         EnsureChannelFirstd(keys=img_keys + lab_keys, channel_dim="no_channel"),
         Orientationd(keys=img_keys + lab_keys, axcodes=orientation_axcodes),
-
         Spacingd(
-            keys=img_keys + lab_keys, pixdim=target_spacing,
+            keys=img_keys + lab_keys,
+            pixdim=target_spacing,
             mode=tuple(["bilinear"] * len(img_keys) + ["nearest"] * len(lab_keys)),
         ),
-
-
         Resized(keys=img_keys, spatial_size=target_size, mode="trilinear"),
         Resized(keys=lab_keys, spatial_size=target_size, mode="nearest"),
-
-        AssertPairAlignedd(img_keys=img_keys, lab_keys=lab_keys,
-                       atol_spacing=1e-4, atol_affine=1e-3, atol_dir=1e-4),     # 拼接前强校验
-
+        AssertPairAlignedd(
+            img_keys=img_keys,
+            lab_keys=lab_keys,
+            atol_spacing=1e-4,
+            atol_affine=1e-3,
+            atol_dir=1e-4,
+        ),  # 拼接前强校验
         ConcatItemsd(keys=img_keys, name="image", dim=0),  # (C,H,W,Z)
         ConcatItemsd(keys=lab_keys, name="label", dim=0),  # (C,H,W,Z)
         DeleteItemsd(keys=img_keys + lab_keys),
     ]
 
     # —— 训练增强（只在 train=True 时追加；空间类对 image+label，同步；强度类只对 image）——
-    
+
     aug = [
         RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
         RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
         RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
-        RandRotate90d(keys=["image","label"], prob=0.3, max_k=3),
+        RandRotate90d(keys=["image", "label"], prob=0.3, max_k=3),
         RandAffined(
-            keys=["image", "label"], prob=0.25,
+            keys=["image", "label"],
+            prob=0.25,
             rotate_range=(0.1, 0.1, 0.1),
             scale_range=(0.1, 0.1, 0.1),
             translate_range=(4, 4, 2),
@@ -767,6 +775,7 @@ def get_FS_transforms(
     ]
 
     return Compose(deterministic + aug + tail), Compose(deterministic + tail)
+
 
 def get_Brats_transforms(
     config: EasyDict,
@@ -936,9 +945,9 @@ class MultiModalityDataset(monai.data.Dataset):
         for i in range(0, len(item["image"])):
             images.append(combined_data[f"model_{i}_image"])
             labels.append(combined_data[f"model_{i}_label"])
-            image_tensor = torch.cat(images, dim=0)
-            label_tensor = torch.cat(labels, dim=0)
-
+            
+        image_tensor = torch.cat(images, dim=0)
+        label_tensor = torch.cat(labels, dim=0)
         result = {"image": image_tensor, "label": label_tensor}
         result = self.transforms(result)
 
@@ -967,7 +976,11 @@ class MultiModalityDataset(monai.data.Dataset):
                     "center": torch.tensor(item["center"]).unsqueeze(0).long(),
                 }
         else:
-            return {"image": result["image"], "label": result["label"], "center": result["center"]}
+            return {
+                "image": result["image"],
+                "label": result["label"],
+                "center": result["center"],
+            }
 
 
 class DCMDataset(monai.data.Dataset):
@@ -975,6 +988,7 @@ class DCMDataset(monai.data.Dataset):
     data: 你的原始列表（每个元素是 {"image":{模态: dcm列表}, "label":{模态: nii路径}}）
     transform: 外部传入（train 有 Rand*，val 没有）
     """
+
     def __init__(self, data: List[Dict[str, Any]], transform=None):
         if not data:
             raise ValueError("Empty dataset.")
@@ -986,8 +1000,8 @@ class DCMDataset(monai.data.Dataset):
         for s in data:
             item = {}
             for m in self.modalities:
-                item[f"img_{m}"] = s["image"][m]   # list[str] of .dcm
-                item[f"lab_{m}"] = s["label"][m]   # str of .nii
+                item[f"img_{m}"] = s["image"][m]  # list[str] of .dcm
+                item[f"lab_{m}"] = s["label"][m]  # str of .nii
             flat.append(item)
 
         super().__init__(data=flat, transform=transform)
@@ -1076,7 +1090,7 @@ def split_examples_to_data(data, config, lack_flag=False, loding=False):
         data_root = config.GCNC_loader.root
     elif config.trainer.choose_dataset == "FS":
         data_root = config.FS_loader.root
-    
+
     train_example = data_root + "/" + "train_examples.txt"
     val_example = data_root + "/" + "val_examples.txt"
     test_example = data_root + "/" + "test_examples.txt"
@@ -1252,7 +1266,12 @@ def get_dataloader_GCNC(
     use_data = [item for item in use_data_list if item not in remove_list]
 
     data, test_data, data_lack = load_MR_dataset_images(
-        datapath, use_data, use_models, content_dict, data_choose="GCNC", test_center=config.GCNC_loader.test_center
+        datapath,
+        use_data,
+        use_models,
+        content_dict,
+        data_choose="GCNC",
+        test_center=config.GCNC_loader.test_center,
     )
     load_transform, train_transform, val_transform = get_GCNC_transforms(config)
 
@@ -1340,13 +1359,15 @@ def get_dataloader_GCNC(
         (train_example, val_example, test_example),
     )
 
-    
-    
-def get_dataloader_FS(config: EasyDict,
+
+def get_dataloader_FS(
+    config: EasyDict,
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     root = config.FS_loader.root
     datapath = root + "/" + "primary_data/data/MRI-Segments/"
-    use_data_list = [d for d in os.listdir(datapath) if os.path.isdir(os.path.join(datapath, d))]
+    use_data_list = [
+        d for d in os.listdir(datapath) if os.path.isdir(os.path.join(datapath, d))
+    ]
     remove_list = config.FS_loader.leapfrog
     use_data = [item for item in use_data_list if item not in remove_list]
     data = load_MR_dcm_dataset_images(datapath, use_data, config.FS_loader.checkModels)
@@ -1371,18 +1392,19 @@ def get_dataloader_FS(config: EasyDict,
             need_val_data = val_data + test_data
             val_data = need_val_data
             test_data = need_val_data
-    
+
     train_example = check_example(train_data, dcm=True)
     val_example = check_example(val_data, dcm=True)
     test_example = check_example(test_data, dcm=True)
-    
+
     train_trasform, val_trasform = get_FS_transforms(
         modalities=config.FS_loader.checkModels,
-        target_spacing=(1.0,1.0,1.0),
+        target_spacing=(1.0, 1.0, 1.0),
         target_size=config.FS_loader.target_size,
         dtype_image=torch.float32,
-        dtype_label=torch.float32)
-    
+        dtype_label=torch.float32,
+    )
+
     # train_dataset = DCMDataset(
     #     train_data,
     #     target_spacing=(1.0, 1.0, 1.0),  # 你需要的体素间距
@@ -1390,52 +1412,52 @@ def get_dataloader_FS(config: EasyDict,
     #     dtype_image=torch.float32,
     #     dtype_label=torch.float32,       # 若是离散 mask 想要整数：改为 torch.long
     # )
-    
+
     train_dataset = DCMDataset(
         train_data,
-        transform=train_trasform,       # 若是离散 mask 想要整数：改为 torch.long
+        transform=train_trasform,  # 若是离散 mask 想要整数：改为 torch.long
     )
     val_dataset = DCMDataset(
         val_data,
-        transform=val_trasform,       # 若是离散 mask 想要整数：改为 torch.long
+        transform=val_trasform,  # 若是离散 mask 想要整数：改为 torch.long
     )
     test_dataset = DCMDataset(
         test_data,
-        transform=val_trasform,       # 若是离散 mask 想要整数：改为 torch.long
+        transform=val_trasform,  # 若是离散 mask 想要整数：改为 torch.long
     )
-    
+
     train_loader = monai.data.DataLoader(
         train_dataset,
         num_workers=config.FS_loader.num_workers,
         batch_size=config.trainer.batch_size,
         shuffle=True,
-        pin_memory=True
+        pin_memory=True,
     )
-    
+
     val_loader = monai.data.DataLoader(
         val_dataset,
         num_workers=config.FS_loader.num_workers,
         batch_size=config.trainer.batch_size,
         shuffle=False,
-        pin_memory=True
+        pin_memory=True,
     )
-    
+
     test_loader = monai.data.DataLoader(
         test_dataset,
         num_workers=config.FS_loader.num_workers,
         batch_size=config.trainer.batch_size,
         shuffle=False,
-        pin_memory=True
+        pin_memory=True,
     )
-    
-    
+
     return (
         train_loader,
         val_loader,
         test_loader,
         (train_example, val_example, test_example),
     )
-    
+
+
 def get_dataloader_BraTS(
     config: EasyDict,
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
@@ -1470,17 +1492,17 @@ def get_dataloader_BraTS(
 if __name__ == "__main__":
     config = EasyDict(
         yaml.load(
-            open("/workspace/GZTumor/config.yml", "r", encoding="utf-8"),
+            open("/workspace/Jeming/GZ/config.yml", "r", encoding="utf-8"),
             Loader=yaml.FullLoader,
         )
     )
 
     # train_loader, val_loader, test_loader, _ = get_dataloader_GCM(config)
-    # train_loader, val_loader, test_loader, _ = get_dataloader_GCNC(config)
+    train_loader, val_loader, test_loader, _ = get_dataloader_GCNC(config)
     # train_loader, val_loader, test_loader, _ = get_dataloader_FS(config)
 
-    train_loader, val_loader, test_loader, _ = get_dataloader_FS(config)
-    
+    # train_loader, val_loader, test_loader, _ = get_dataloader_FS(config)
+
     conut = 0
     f_count = 0
 
@@ -1496,10 +1518,10 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Error occurred while loading batch {i}: {e}")
             continue
-    
-    print(f"Total train batches: {count}")    
-      
-    count = 0    
+
+    print(f"Total train batches: {count}")
+
+    count = 0
     for i, batch in enumerate(val_loader):
         try:
             # print(batch["image"].shape)
@@ -1508,10 +1530,10 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Error occurred while loading batch {i}: {e}")
             continue
-    
-    print(f"Total val batches: {count}")  
-    
-    count = 0    
+
+    print(f"Total val batches: {count}")
+
+    count = 0
     for i, batch in enumerate(test_loader):
         try:
             # print(batch["image"].shape)
@@ -1521,4 +1543,4 @@ if __name__ == "__main__":
             print(f"Error occurred while loading batch {i}: {e}")
             continue
 
-    print(f"Total test batches: {count}")  
+    print(f"Total test batches: {count}")

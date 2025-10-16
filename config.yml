@@ -20,7 +20,7 @@ finetune:
   GCM:
     checkpoint: None
   GCNC:
-    checkpoint: HSL_Net_class_multimodals_v1
+    checkpoint: None
   FS:
     checkpoint: None
   BraTS:
@@ -67,7 +67,7 @@ GCNC_loader:
   # leapfrog: some data error can write in this list to remove from dataloader
   # leapfrog: ['0001902261', '0000439538','0002235469','0001308202']
   leapfrog: ['H32444']
-  root: /mnt/liangjm/GCNC/
+  root: /root/.cache/huggingface/forget/datasets/GCNC/
   test_center: 3
   checkModels: ["T1", "T1+C", "T2"]
   # checkModels: ["T1", "T1+C"]
