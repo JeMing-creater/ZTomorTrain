@@ -1,6 +1,8 @@
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+import test
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 import sys
 import csv
 from datetime import datetime
@@ -20,9 +22,9 @@ from objprint import objstr
 from timm.optim import optim_factory
 
 from src import utils
-from src.loader import get_dataloader_GCM as get_dataloader
-from src.loader import get_GCM_transforms as get_transforms
-from src.loader import read_csv_for_GCM
+from src.loader import get_dataloader_GCNC as get_dataloader
+from src.loader import get_GCNC_transforms as get_transforms
+from src.loader import read_csv_for_GCNC
 from src.optimizer import LinearWarmupCosineAnnealingLR
 from src.utils import (
     Logger,
@@ -63,56 +65,77 @@ def load_model(model, accelerator, checkpoint):
 @torch.no_grad()
 def val_one_epoch(
     model: torch.nn.Module,
+    inference: monai.inferers.Inferer,
     val_loader: torch.utils.data.DataLoader,
     metrics: Dict[str, monai.metrics.CumulativeIterationMetric],
+    step: int,
     post_trans: monai.transforms.Compose,
     accelerator: Accelerator,
+    config: EasyDict,
+    test: bool = False,
 ):
     # 验证
     model.eval()
+    dice_acc = 0
+    dice_class = []
+    hd95_acc = 0
+    hd95_class = []
     for i, image_batch in enumerate(val_loader):
-        logits = model(image_batch["image"])
-        log = ""
-        total_loss = 0
-
-        logits_loss = logits
-        labels_loss = image_batch["class_label"]
-
-        for name in loss_functions:
-            loss = loss_functions[name](logits_loss, labels_loss.float())
-            log += f"{name}: {float(loss):1.5f} ; "
-            total_loss += loss
-
-        log += f"Total Loss: {float(total_loss):1.5f}"
-
+        if config.trainer.choose_model == "HSL_Net":
+            _, logits = model(image_batch["image"])
+        else:
+            logits = model(image_batch["image"])
+        # logits = inference(image_batch["image"], model)
+        val_outputs = post_trans(logits)
         for metric_name in metrics:
-            y_pred = post_trans(logits)
-            y = labels_loss
-            if metric_name == "miou_metric":
-                y_pred = y_pred.unsqueeze(2)
-                y = y.unsqueeze(2)
-            metrics[metric_name](y_pred=y_pred, y=y)
+            metrics[metric_name](y_pred=val_outputs, y=image_batch["label"])
+        accelerator.print(
+            f"[{i + 1}/{len(val_loader)}] Validation Loading...", flush=True
+        )
 
-        accelerator.print(f"[{i + 1}/{len(val_loader)}] {log} ", flush=True)
+        step += 1
     metric = {}
-
+    if test:
+        flag = "Test"
+    else:
+        flag = "Val"
     for metric_name in metrics:
-        # for channel in range(channels):
         batch_acc = metrics[metric_name].aggregate()[0].to(accelerator.device)
 
         if accelerator.num_processes > 1:
             batch_acc = accelerator.reduce(batch_acc) / accelerator.num_processes
-
-        # give every single task metric
         metrics[metric_name].reset()
-        # task_num = channel + 1
-        metric.update(
-            {
-                f"{metric_name}": float(batch_acc.mean()),
-            }
+        if metric_name == "dice_metric":
+            metric.update(
+                {
+                    f"{flag}/mean {metric_name}": float(batch_acc.mean()),
+                    # f"{flag}/Object1 {metric_name}": float(batch_acc[0]),
+                    # f"{flag}/Object2 {metric_name}": float(batch_acc[1]),
+                    # f"{flag}/Object3 {metric_name}": float(batch_acc[2]),
+                }
+            )
+            dice_acc = torch.Tensor([metric[f"{flag}/mean dice_metric"]]).to(
+                accelerator.device
+            )
+            dice_class = batch_acc
+        else:
+            metric.update(
+                {
+                    f"{flag}/mean {metric_name}": float(batch_acc.mean()),
+                    # f"{flag}/Object1 {metric_name}": float(batch_acc[0]),
+                    # f"{flag}/Object2 {metric_name}": float(batch_acc[1]),
+                    # f"{flag}/Object3 {metric_name}": float(batch_acc[2]),
+                }
+            )
+            hd95_acc = torch.Tensor([metric[f"{flag}/mean hd95_metric"]]).to(
+                accelerator.device
+            )
+            hd95_class = batch_acc
+    # accelerator.log(metric, step=epoch)
+    accelerator.print(
+            f"dice acc: {dice_acc} dice_class: {dice_class} hd95_acc: {hd95_acc} hd95_class: {hd95_class}"
         )
-    accelerator.print(metric)
-    return
+    
 
 
 @torch.no_grad()
@@ -134,12 +157,12 @@ def compute_seg_dice_for_example(model, config, post_trans, examples):
         load_transform, _, _ = get_transforms(config)
 
         for e in example_ids:
-            img_dir = os.path.join(config.GCM_loader.root, "ALL", e)
+            img_dir = os.path.join(config.GCNC_loader.root, "ALL", e)
             accelerator.print(f"Processing segmentation for: {img_dir}")
 
             # 1️⃣ 加载多模态图像与标签
             images, labels = [], []
-            for i, mod in enumerate(config.GCM_loader.checkModels):
+            for i, mod in enumerate(config.GCNC_loader.checkModels):
                 image_path = os.path.join(img_dir, mod, f"{e}.nii.gz")
                 label_path = os.path.join(img_dir, mod, f"{e}seg.nii.gz")
                 data = load_transform[i]({"image": image_path, "label": label_path})
@@ -194,8 +217,8 @@ if __name__ == "__main__":
     )
     utils.same_seeds(50)
 
-    if config.finetune.GCM.checkpoint != "None":
-        checkpoint_name = config.finetune.GCM.checkpoint
+    if config.finetune.GCNC.checkpoint != "None":
+        checkpoint_name = config.finetune.GCNC.checkpoint
     else:
         checkpoint_name = (
             config.trainer.choose_dataset
@@ -238,19 +261,17 @@ if __name__ == "__main__":
     }
 
     metrics = {
-        "accuracy": monai.metrics.ConfusionMatrixMetric(
-            include_background=False, metric_name="accuracy"
+        "dice_metric": monai.metrics.DiceMetric(
+            include_background=True,
+            reduction=monai.utils.MetricReduction.MEAN_BATCH,
+            get_not_nans=True,
         ),
-        "f1": monai.metrics.ConfusionMatrixMetric(
-            include_background=False, metric_name="f1 score"
+        "hd95_metric": monai.metrics.HausdorffDistanceMetric(
+            percentile=95,
+            include_background=True,
+            reduction=monai.utils.MetricReduction.MEAN_BATCH,
+            get_not_nans=True,
         ),
-        "specificity": monai.metrics.ConfusionMatrixMetric(
-            include_background=False, metric_name="specificity"
-        ),
-        "recall": monai.metrics.ConfusionMatrixMetric(
-            include_background=False, metric_name="recall"
-        ),
-        "miou_metric": monai.metrics.MeanIoU(include_background=False),
     }
 
     post_trans = monai.transforms.Compose(
@@ -263,8 +284,33 @@ if __name__ == "__main__":
     model, train_loader, val_loader, test_loader = accelerator.prepare(
         model, train_loader, val_loader, test_loader
     )
+    
+    inference = monai.inferers.SlidingWindowInferer(
+        roi_size=config.GCNC_loader.target_size,
+        overlap=0.5,
+        sw_device=accelerator.device,
+        device=accelerator.device,
+    )
 
     # start valing
     accelerator.print("Start Valing! ")
-    val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
-    compute_seg_dice_for_example(model, config, post_trans, example)
+    val_one_epoch(model,
+            inference,
+            val_loader,
+            metrics,
+            -1,
+            post_trans,
+            accelerator,
+            config,
+            test=False,)
+    
+    val_one_epoch(model,
+            inference,
+            test_loader,
+            metrics,
+            -1,
+            post_trans,
+            accelerator,
+            config,
+            test=False,)
+    # compute_seg_dice_for_example(model, config, post_trans, example)
