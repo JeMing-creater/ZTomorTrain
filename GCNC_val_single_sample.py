@@ -135,7 +135,6 @@ def val_one_epoch(
     accelerator.print(
             f"dice acc: {dice_acc} dice_class: {dice_class} hd95_acc: {hd95_acc} hd95_class: {hd95_class}"
         )
-    
 
 
 @torch.no_grad()
@@ -154,7 +153,7 @@ def compute_seg_dice_for_example(model, config, post_trans, examples):
         results = []
 
         # 加载transform，与compute_dl_score_for_example一致
-        load_transform, _, _ = get_transforms(config)
+        load_transform, _, transforms = get_transforms(config)
 
         for e in example_ids:
             img_dir = os.path.join(config.GCNC_loader.root, "ALL", e)
@@ -162,13 +161,32 @@ def compute_seg_dice_for_example(model, config, post_trans, examples):
 
             # 1️⃣ 加载多模态图像与标签
             images, labels = [], []
+
+            models = os.listdir(os.path.join(img_dir))
+
             for i, mod in enumerate(config.GCNC_loader.checkModels):
+                if mod not in models:
+                    if mod == "T1+C":
+                        mod = "T1WI+C"
+                        if mod not in models:
+                            mod = "CT1"
+                        if mod not in models:
+                            mod = "T1+c"
+                    else:
+                        mod = mod + "WI"
+
                 image_path = os.path.join(img_dir, mod, f"{e}.nii.gz")
                 label_path = os.path.join(img_dir, mod, f"{e}seg.nii.gz")
                 data = load_transform[i]({"image": image_path, "label": label_path})
-                images.append(data["image"].unsqueeze(1))
-                labels.append(data["label"].unsqueeze(1))
 
+                # images.append(data["image"].unsqueeze(1))
+                # labels.append(data["label"].unsqueeze(1))
+                images.append(data["image"])
+                labels.append(data["label"])
+                
+            result = {"image": image_tensor, "label": label_tensor}
+            result = transforms(result)
+            
             image_tensor = torch.cat(images, dim=1).to(accelerator.device)
             label_tensor = torch.cat(labels, dim=1).to(accelerator.device)
 
@@ -294,23 +312,23 @@ if __name__ == "__main__":
 
     # start valing
     accelerator.print("Start Valing! ")
-    val_one_epoch(model,
-            inference,
-            val_loader,
-            metrics,
-            -1,
-            post_trans,
-            accelerator,
-            config,
-            test=False,)
+    # val_one_epoch(model,
+    #         inference,
+    #         val_loader,
+    #         metrics,
+    #         -1,
+    #         post_trans,
+    #         accelerator,
+    #         config,
+    #         test=False,)
     
-    val_one_epoch(model,
-            inference,
-            test_loader,
-            metrics,
-            -1,
-            post_trans,
-            accelerator,
-            config,
-            test=False,)
-    # compute_seg_dice_for_example(model, config, post_trans, example)
+    # val_one_epoch(model,
+    #         inference,
+    #         test_loader,
+    #         metrics,
+    #         -1,
+    #         post_trans,
+    #         accelerator,
+    #         config,
+    #         test=False,)
+    compute_seg_dice_for_example(model, config, post_trans, example)
