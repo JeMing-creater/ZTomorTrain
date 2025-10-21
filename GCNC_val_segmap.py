@@ -324,9 +324,6 @@ def visualize_for_single(config, model, accelerator):
         )
 
 
-
-
-
 def warm_up(
     model: torch.nn.Module,
     loss_functions: Dict[str, torch.nn.modules.loss._Loss],
@@ -482,36 +479,46 @@ if __name__ == "__main__":
         max_epochs=config.trainer.num_epochs,
     )
 
-    model, optimizer, scheduler, train_loader, val_loader = accelerator.prepare(
-        model, optimizer, scheduler, train_loader, val_loader
+    model, optimizer, scheduler, train_loader, val_loader, test_loader = accelerator.prepare(
+        model, optimizer, scheduler, train_loader, val_loader, test_loader
     )
 
-    # model = warm_up(model, loss_functions, train_loader,
-    #         optimizer, scheduler, accelerator)
+    loss_functions = {
+        "focal_loss": monai.losses.FocalLoss(to_onehot_y=False),
+        "dice_loss": monai.losses.DiceLoss(
+            smooth_nr=0, smooth_dr=1e-5, to_onehot_y=False, sigmoid=True
+        ),
+    }
+    metrics = {
+        "dice_metric": monai.metrics.DiceMetric(
+            include_background=True,
+            reduction=monai.utils.MetricReduction.MEAN_BATCH,
+            get_not_nans=True,
+        ),
+    }
+    post_trans = monai.transforms.Compose(
+        [
+            monai.transforms.Activations(sigmoid=True),
+            monai.transforms.AsDiscrete(threshold=0.5),
+        ]
+    )
 
-    # loss_functions = {
-    #     "focal_loss": monai.losses.FocalLoss(to_onehot_y=False),
-    #     "dice_loss": monai.losses.DiceLoss(
-    #         smooth_nr=0, smooth_dr=1e-5, to_onehot_y=False, sigmoid=True
-    #     ),
-    # }
-    # metrics = {
-    #     "dice_metric": monai.metrics.DiceMetric(
-    #         include_background=True,
-    #         reduction=monai.utils.MetricReduction.MEAN_BATCH,
-    #         get_not_nans=True,
-    #     ),
-    # }
-    # post_trans = monai.transforms.Compose(
-    #     [
-    #         monai.transforms.Activations(sigmoid=True),
-    #         monai.transforms.AsDiscrete(threshold=0.5),
-    #     ]
-    # )
+    model = warm_up(
+        model, loss_functions, train_loader, optimizer, scheduler, accelerator
+    )
 
-    # dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
-    #     model, inference, val_loader, metrics, 0, post_trans, accelerator
-    # )
-    # accelerator.print(f"dice acc: {dice_acc} best class: {dice_class}")
+    dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
+        model, inference, val_loader, metrics, 0, post_trans, accelerator
+    )
+    accelerator.print(f"dice acc: {dice_acc} best class: {dice_class}")
 
-    visualize_for_single(config=config, model=model, accelerator=accelerator)
+    model = warm_up(
+        model, loss_functions, train_loader, optimizer, scheduler, accelerator
+    )
+
+    dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
+        model, inference, test_loader, metrics, 0, post_trans, accelerator
+    )
+    accelerator.print(f"dice acc: {dice_acc} best class: {dice_class}")
+
+    # visualize_for_single(config=config, model=model, accelerator=accelerator)
