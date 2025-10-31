@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from monai.utils import ensure_tuple_rep
 from monai.networks.utils import one_hot
 from typing import List, Dict, Any
-
+from monai.transforms import MapTransform
 sitk.ProcessObject.SetGlobalWarningDisplay(False)
 from typing import Tuple, List, Mapping, Hashable, Dict
 from monai.transforms import (
@@ -161,6 +161,9 @@ class SafeLoadDICOMd(MapTransform):
             A[:3, :3] = R @ S
             A[:3, 3] = np.array(origin_xyz, dtype=np.float64)
 
+            # ✅ 新增 spatial_shape 字段
+            spatial_shape = arr_hwz.shape  # (H, W, Z)
+            
             # 写回数据与 meta
             d[key] = arr_hwz  # (H, W, Z)
             d[f"{key}_meta_dict"] = {
@@ -168,8 +171,25 @@ class SafeLoadDICOMd(MapTransform):
                 "direction": tuple(direction),
                 "origin": origin_xyz,
                 "affine": A,  # 提供 affine，利于 Orientationd/Spacingd
+                "spatial_shape": spatial_shape,  # ✅ 加这一行
                 "original_channel_dim": "no_channel",
             }
+        return d
+
+
+class PreserveMetaD(MapTransform):
+    def __init__(self, img_keys, lab_keys):
+        super().__init__(img_keys + lab_keys)
+        self.img_keys = img_keys
+        self.lab_keys = lab_keys
+
+    def __call__(self, data):
+        d = dict(data)
+        # 保留任意一个模态的 meta 作为总体 meta
+        first_img = self.img_keys[0]
+        first_lab = self.lab_keys[0]
+        d["image_meta_dict"] = d.get(f"{first_img}_meta_dict", {})
+        d["label_meta_dict"] = d.get(f"{first_lab}_meta_dict", {})
         return d
 
 
@@ -711,6 +731,7 @@ def get_GCNC_transforms(
     return load_transform, train_transform, val_transform
 
 
+
 def get_FS_transforms(
     modalities,
     target_spacing=(1.0, 1.0, 1.0),
@@ -746,6 +767,7 @@ def get_FS_transforms(
         ),  # 拼接前强校验
         ConcatItemsd(keys=img_keys, name="image", dim=0),  # (C,H,W,Z)
         ConcatItemsd(keys=lab_keys, name="label", dim=0),  # (C,H,W,Z)
+        PreserveMetaD(img_keys, lab_keys),
         DeleteItemsd(keys=img_keys + lab_keys),
     ]
 
@@ -984,10 +1006,6 @@ class MultiModalityDataset(monai.data.Dataset):
 
 
 class DCMDataset(monai.data.Dataset):
-    """
-    data: 你的原始列表（每个元素是 {"image":{模态: dcm列表}, "label":{模态: nii路径}}）
-    transform: 外部传入（train 有 Rand*，val 没有）
-    """
 
     def __init__(self, data: List[Dict[str, Any]], transform=None):
         if not data:

@@ -1,6 +1,6 @@
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 import sys
 import csv
 from datetime import datetime
@@ -363,6 +363,6 @@ if __name__ == "__main__":
     # start valing
     accelerator.print("Start Valing! ")
     # val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
-    val_one_epoch(model, val_loader, metrics, post_trans, accelerator)
-    val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
-    # compute_dl_score_for_example(model, config, post_trans, example)
+    # val_one_epoch(model, val_loader, metrics, post_trans, accelerator)
+    # val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
+    compute_dl_score_for_example(model, config, post_trans, example)
