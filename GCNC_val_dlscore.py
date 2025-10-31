@@ -1,6 +1,6 @@
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 import sys
 import csv
 from datetime import datetime
@@ -133,7 +133,7 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
         # count = 0
         for e in example:
             # count+=1
-            
+
             # if count >10:
             #     break
             choose_image = config.GCNC_loader.root + "/" + "ALL" + "/" + f"{e}"
@@ -159,7 +159,9 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
                     image_path = choose_image + "/" + m + "/" + f"{e}.nii.gz"
                     label_path = choose_image + "/" + m + "/" + f"{e}seg.nii.gz"
 
-                    batch = load_transform[i]({"image": image_path, "label": label_path})
+                    batch = load_transform[i](
+                        {"image": image_path, "label": label_path}
+                    )
                     images.append(batch["image"].unsqueeze(1))
                     labels.append(batch["label"].unsqueeze(1))
                     i += 1
@@ -225,7 +227,7 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
             # 遍历字典并写入键值对
             for key, value in dl_score.items():
                 writer.writerow(
-                    [str(key), value, lable_score[key], use_data_dict[key]['M']]
+                    [str(key), value, lable_score[key], use_data_dict[key]["M"]]
                 )
 
     def change_to_xlxs(csv_file, save_path):
@@ -360,5 +362,7 @@ if __name__ == "__main__":
 
     # start valing
     accelerator.print("Start Valing! ")
-    # val_one_epoch(model, train_loader, metrics, post_trans, accelerator)
+    # val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
+    # val_one_epoch(model, val_loader, metrics, post_trans, accelerator)
+    # val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
     compute_dl_score_for_example(model, config, post_trans, example)

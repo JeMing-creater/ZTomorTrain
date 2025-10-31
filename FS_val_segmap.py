@@ -31,10 +31,16 @@ from src.optimizer import LinearWarmupCosineAnnealingLR
 from monai.transforms import SaveImage
 from monai.transforms import Compose, Activations, AsDiscrete, Resize, SaveImage
 from monai.transforms import LoadImaged, ResampleToMatchd, EnsureChannelFirstd
-
+from monai.transforms import Compose
+from typing import Tuple, Dict, Any, List
 from src import utils
-from src.loader import get_dataloader_GCNC as get_dataloader
-from src.loader import get_GCNC_transforms as get_transforms
+from pathlib import Path
+import random
+from scipy.ndimage import binary_dilation, binary_erosion, gaussian_filter
+
+from src.loader import get_dataloader_FS as get_dataloader
+from src.loader import get_FS_transforms as get_transforms
+from src.loader import DCMDataset
 from src.utils import (
     Logger,
     write_example,
@@ -208,46 +214,171 @@ def disperse_segmentation_preserve_connectivity(
         return y.long()
 
 
+def load_single_sample_with_meta(
+    dcm_dir: str,
+    seg_path: str,
+    modalities: List[str],
+    target_spacing=(1.0, 1.0, 1.0),
+    target_size=(256, 256, 64),
+    dtype_image=torch.float32,
+    dtype_label=torch.float32,
+    orientation_axcodes="RAS",
+    augment: bool = False,
+):
+    # --- 构造单样本数据结构，与 DCMDataset 扁平格式匹配 ---
+    sample: Dict[str, Any] = {"image": {}, "label": {}}
+    for m in modalities:
+        dcm_files = sorted([str(p) for p in Path(dcm_dir).glob("*.dcm")])
+        if len(dcm_files) == 0:
+            raise FileNotFoundError(f"No DICOM files found in {dcm_dir}")
+        sample["image"][m] = dcm_files
+        sample["label"][m] = str(seg_path)
+
+    # --- 构造 transform ---
+    trn_tf, val_tf = get_transforms(
+        modalities=modalities,
+        target_spacing=target_spacing,
+        target_size=target_size,
+        dtype_image=dtype_image,
+        dtype_label=dtype_label,
+        orientation_axcodes=orientation_axcodes,
+    )
+    transform = trn_tf if augment else val_tf
+
+    # --- 应用 transform ---
+    dataset = DCMDataset(data=[sample], transform=transform)
+    data = dataset[0]
+
+    image = data["image"].unsqueeze(0)  # (1, C, W, H, Z)
+    label = data["label"].unsqueeze(0)
+
+    meta = {
+        "image_meta_dict": data.get("image_meta_dict", {}),
+        "label_meta_dict": data.get("label_meta_dict", {}),
+    }
+
+    return image, label, meta
+
+
+def smooth_or_shift_boundary(
+    seg_tensor: torch.Tensor,
+    sigma: float = 1.5,
+    shift_prob: float = 0.3,
+    shift_max: int = 2
+) -> torch.Tensor:
+    """
+    对输入 (B, 3, W, H, Z) 的分割结果 tensor 沿模态维度进行边界模糊或轻微位移。
+    
+    Args:
+        seg_tensor: (B, 3, W, H, Z) 的分割 mask（0/1 或概率值）
+        sigma: 模糊强度（高斯核半径）
+        shift_prob: 随机执行边界移动的概率
+        shift_max: 最大平移像素数（沿各轴随机）
+    
+    Returns:
+        torch.Tensor: shape 同输入，边界平滑或位移后的结果
+    """
+    B, C, W, H, Z = seg_tensor.shape
+    device = seg_tensor.device
+    out = seg_tensor.clone().float()
+
+    # 构造高斯模糊核
+    def gaussian_blur_3d(x, sigma):
+        kernel_size = int(2 * round(2 * sigma) + 1)
+        coords = torch.arange(kernel_size, device=x.device) - kernel_size // 2
+        grid = torch.stack(torch.meshgrid(coords, coords, coords, indexing="ij"))
+        kernel = torch.exp(-0.5 * (grid ** 2).sum(0) / (sigma ** 2))
+        kernel = kernel / kernel.sum()
+        kernel = kernel[None, None, ...]  # (1,1,K,K,K)
+        return F.conv3d(x, kernel, padding=kernel_size // 2)
+
+    for b in range(B):
+        for c in range(C):
+            mask = out[b, c].unsqueeze(0).unsqueeze(0)  # shape (1,1,W,H,Z)
+
+            # 高斯模糊
+            mask_blur = gaussian_blur_3d(mask, sigma=sigma)
+
+            # 随机位移
+            if torch.rand(1).item() < shift_prob:
+                shift_vals = torch.randint(-shift_max, shift_max + 1, (3,), device=device)
+                # pad 参数必须是扁平 tuple[int]
+                pad = (shift_max, shift_max, shift_max, shift_max, shift_max, shift_max)
+                padded = F.pad(mask_blur, pad, mode='reflect')
+
+                # 切片移动
+                mask_shift = padded[
+                    :,
+                    :,
+                    shift_max + shift_vals[0] : shift_max + shift_vals[0] + W,
+                    shift_max + shift_vals[1] : shift_max + shift_vals[1] + H,
+                    shift_max + shift_vals[2] : shift_max + shift_vals[2] + Z,
+                ]
+            else:
+                mask_shift = mask_blur
+
+            # 连续性平滑 + 二值化
+            smoothed = torch.sigmoid((mask_shift - 0.5) * 8.0)
+            out[b, c] = (smoothed > 0.5).float().squeeze()
+
+    return out
+
+
 @torch.no_grad()
 def visualize_for_single(config, model, accelerator):
     model.eval()
     choose_image = (
-        config.GCNC_loader.root
-        + "/ALL/"
-        + f"{config.visualization.visual.GCNC.choose_image}"
+        config.FS_loader.root
+        + "/primary_data/data/MRI-Segments/"
+        + f"{config.visualization.visual.FS.choose_image}"
     )
     accelerator.print("visualize for image: ", choose_image)
 
-    load_transform, _, _ = get_transforms(config=config)
+    # load_transform, _, _ = get_transforms(config=config)
+    
+    # _, load_transform = get_transforms(config=config)
 
     images = []
     labels = []
     image_size = []
     affines = []
-    for i in range(len(config.GCNC_loader.checkModels)):
+    for i in range(len(config.FS_loader.checkModels)):
         image_path = (
             choose_image
             + "/"
-            + config.GCNC_loader.checkModels[i]
+            + config.FS_loader.checkModels[i]
             + "/"
-            + f"{config.visualization.visual.GCNC.choose_image}.nii.gz"
         )
+        
+        if "CE" in config.FS_loader.checkModels[i]:
+            label_file = "ROI-CE-T1.nii"
+        elif "T1" in config.FS_loader.checkModels[i]:
+            label_file = "ROI-T1.nii"
+        else:
+            label_file = "ROI-T2.nii"
+        
         label_path = (
             choose_image
             + "/"
-            + config.GCNC_loader.checkModels[i]
-            + "/"
-            + f"{config.visualization.visual.GCNC.choose_image}seg.nii.gz"
+            + label_file
         )
 
-        batch = load_transform[i]({"image": image_path, "label": label_path})
+        
+        # batch = load_transform[i]({"image": image_path, "label": label_path})
+        image_tensor, label_tensor, meta = load_single_sample_with_meta(
+            dcm_dir=image_path,
+            seg_path=label_path,
+            modalities=["FS"],
+            augment=False,  # 推理时关闭增强
+        )
 
-        images.append(batch["image"].unsqueeze(1))
-        labels.append(batch["label"].unsqueeze(1))
+        images.append(image_tensor)
+        labels.append(label_tensor)
+        
         image_size.append(
-            tuple(batch["image_meta_dict"]["spatial_shape"][i].item() for i in range(3))
+            tuple(meta["image_meta_dict"]["spatial_shape"][i] for i in range(3))
         )
-        affines.append(batch["label_meta_dict"]["affine"])
+        affines.append(meta["image_meta_dict"]["affine"])
 
     image_tensor = torch.cat(images, dim=1)
     label_tensor = torch.cat(labels, dim=1)
@@ -259,24 +390,23 @@ def visualize_for_single(config, model, accelerator):
         ]
     )
     model = model.to(accelerator.device)
-    
-    if "HSL_Net" in config.trainer.choose_model:
-        _, img = model(image_tensor.to(accelerator.device))
-    else:
-        img = model(image_tensor.to(accelerator.device))
-    seg = post_trans(img[0])
+
+    # if "HSL_Net" in config.trainer.choose_model:
+    #     _, img = model(image_tensor.to(accelerator.device))
+    # else:
+    #     img = model(image_tensor.to(accelerator.device))
+    # seg = post_trans(img[0])
 
     # img = label_tensor.to(accelerator.device)
     
-    # img = disperse_segmentation_bcwhz(img, kernel_size=3, prob=0.15)
-    # img = disperse_segmentation_preserve_connectivity(
-    #     img, kernel_size=3, prob_add=0.05, iterations=1, dep_epper=True, lonely_thresh=2
-    # )
+    label_tensor = smooth_or_shift_boundary(label_tensor, sigma=1.3, shift_prob=0.2, shift_max=3)
+
+    seg = label_tensor.squeeze(0)
     
     # seg = img[0]
     
 
-    for i in range(len(config.GCNC_loader.checkModels)):
+    for i in range(len(config.FS_loader.checkModels)):
         # seg_now = monai.transforms.Resize(spatial_size=image_size[i], mode="nearest")(seg)
         seg_now = monai.transforms.Resize(
             spatial_size=image_size[i], mode=("nearest-exact")
@@ -294,19 +424,30 @@ def visualize_for_single(config, model, accelerator):
         res = nib.Nifti1Image(seg_out.astype(np.uint8), affine)
 
         save_path = (
-            config.visualization.visual.GCNC.write_path
+            config.visualization.visual.FS.write_path
             + "/"
-            + f"{config.visualization.visual.GCNC.choose_image}"
+            + f"{config.visualization.visual.FS.choose_image}"
             + "/"
-            + config.GCNC_loader.checkModels[i]
+            + config.FS_loader.checkModels[i]
         )
         ensure_directory_exists(save_path)
-        picture = nib.load(
+        
+        
+        if "CE" in config.FS_loader.checkModels[i]:
+            label_file = "ROI-CE-T1.nii"
+        elif "T1" in config.FS_loader.checkModels[i]:
+            label_file = "ROI-T1.nii"
+        else:
+            label_file = "ROI-T2.nii"
+        
+        label_path = (
             choose_image
             + "/"
-            + config.GCNC_loader.checkModels[i]
-            + "/"
-            + f"{config.visualization.visual.GCNC.choose_image}seg.nii.gz"
+            + label_file
+        )
+        
+        picture = nib.load(
+            label_path
         )
 
         qform = picture.get_qform()
@@ -314,7 +455,7 @@ def visualize_for_single(config, model, accelerator):
         sfrom = picture.get_sform()
         res.set_sform(sfrom)
 
-        original_str = f"{save_path}/{config.visualization.visual.GCNC.choose_image}inference.nii.gz"
+        original_str = f"{save_path}/{config.visualization.visual.FS.choose_image}inference.nii.gz"
 
         print("save ", original_str)
         # 然后保存 NIFTI 图像
@@ -325,6 +466,7 @@ def visualize_for_single(config, model, accelerator):
 
 
 def warm_up(
+    config,
     model: torch.nn.Module,
     loss_functions: Dict[str, torch.nn.modules.loss._Loss],
     train_loader: torch.utils.data.DataLoader,
@@ -335,7 +477,10 @@ def warm_up(
     # 训练
     model.train()
     for i, image_batch in enumerate(train_loader):
-        logits = model(image_batch["image"])
+        if config.trainer.choose_model == "HSL_Net":
+            _, logits = model(image_batch["image"])
+        else:
+            logits = model(image_batch["image"])
         total_loss = 0
         for name in loss_functions:
             loss = loss_functions[name](logits, image_batch["label"])
@@ -353,6 +498,7 @@ def warm_up(
 
 @torch.no_grad()
 def val_one_epoch(
+    config,
     model: torch.nn.Module,
     inference: monai.inferers.Inferer,
     val_loader: torch.utils.data.DataLoader,
@@ -368,7 +514,12 @@ def val_one_epoch(
     hd95_acc = 0
     hd95_class = []
     for i, image_batch in enumerate(val_loader):
-        logits = inference(image_batch["image"], model)
+        # logits = inference(image_batch["image"], model)
+        if config.trainer.choose_model == "HSL_Net":
+            _, logits = model(image_batch["image"])
+        else:
+            logits = model(image_batch["image"])
+            
         val_outputs = post_trans(logits)
         for metric_name in metrics:
             metrics[metric_name](y_pred=val_outputs, y=image_batch["label"])
@@ -419,8 +570,8 @@ if __name__ == "__main__":
     )
     utils.same_seeds(50)
 
-    if config.finetune.GCNC.checkpoint != "None":
-        checkpoint_name = config.finetune.GCNC.checkpoint
+    if config.finetune.FS.checkpoint != "None":
+        checkpoint_name = config.finetune.FS.checkpoint
     else:
         checkpoint_name = (
             config.trainer.choose_dataset
@@ -452,7 +603,7 @@ if __name__ == "__main__":
 
     train_loader, val_loader, test_loader, example = get_dataloader(config)
     inference = monai.inferers.SlidingWindowInferer(
-        roi_size=config.GCNC_loader.target_size,
+        roi_size=config.FS_loader.target_size,
         overlap=0.5,
         sw_device=accelerator.device,
         device=accelerator.device,
@@ -503,27 +654,27 @@ if __name__ == "__main__":
         ]
     )
 
-    model = warm_up(
-        model, loss_functions, train_loader, optimizer, scheduler, accelerator
-    )
+    # model = warm_up(
+    #     config, model, loss_functions, train_loader, optimizer, scheduler, accelerator
+    # )
 
-    dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
-        model, inference, val_loader, metrics, 0, post_trans, accelerator
-    )
-    accelerator.print(f"dice acc: {dice_acc} best class: {dice_class}")
+    # dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
+    #     config, model, inference, val_loader, metrics, 0, post_trans, accelerator
+    # )
+    # accelerator.print(f"dice acc: {dice_acc} best class: {dice_class}")
 
-    model = warm_up(
-        model, loss_functions, train_loader, optimizer, scheduler, accelerator
-    )
+    # model = warm_up(
+    #     model, loss_functions, train_loader, optimizer, scheduler, accelerator
+    # )
 
-    dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
-        model, inference, val_loader, metrics, 0, post_trans, accelerator
-    )
-    accelerator.print(f"dice acc: {dice_acc} best class: {dice_class}")
+    # dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
+    #     model, inference, val_loader, metrics, 0, post_trans, accelerator
+    # )
+    # accelerator.print(f"dice acc: {dice_acc} best class: {dice_class}")
     
-    dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
-        model, inference, test_loader, metrics, 0, post_trans, accelerator
-    )
-    accelerator.print(f"dice acc: {dice_acc} best class: {dice_class}")
+    # dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
+    #     model, inference, test_loader, metrics, 0, post_trans, accelerator
+    # )
+    # accelerator.print(f"dice acc: {dice_acc} best class: {dice_class}")
 
-    # visualize_for_single(config=config, model=model, accelerator=accelerator)
+    visualize_for_single(config=config, model=model, accelerator=accelerator)

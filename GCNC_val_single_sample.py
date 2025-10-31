@@ -137,6 +137,44 @@ def val_one_epoch(
         )
 
 
+def compute_dice_from_probs(
+    probs: torch.Tensor, labels: torch.Tensor, threshold: float = 0.5, eps: float = 1e-6
+):
+    """
+    直接计算Dice系数（不依赖MONAI Metric）。
+
+    参数:
+        probs (torch.Tensor): 模型输出概率, 形状 [B, 1, H, W, (D)]
+        labels (torch.Tensor): 真实标签, 形状相同
+        threshold (float): 将概率转为二值mask的阈值 (默认0.5)
+        eps (float): 防止除零的微小常数
+
+    返回:
+        dice_per_sample (list): 每个样本的Dice系数 (长度=B)
+        mean_dice (float): 平均Dice值
+    """
+    # 确保形状一致
+    assert (
+        probs.shape == labels.shape
+    ), f"Shape mismatch: {probs.shape} vs {labels.shape}"
+
+    # 二值化预测
+    # preds = (probs > threshold).float()
+
+    # 展平为向量方便计算
+    preds_flat = probs.contiguous().view(probs.shape[0], -1)
+    labels_flat = labels.contiguous().view(labels.shape[0], -1)
+
+    # 计算交集和并集
+    intersection = (preds_flat * labels_flat).sum(dim=1)
+    union = preds_flat.sum(dim=1) + labels_flat.sum(dim=1)
+
+    dice_per_sample = (2.0 * intersection + eps) / (union + eps)
+    mean_dice = dice_per_sample.mean().item()
+
+    return dice_per_sample.tolist(), mean_dice
+
+
 @torch.no_grad()
 def compute_seg_dice_for_example(model, config, post_trans, examples):
     """
@@ -179,26 +217,30 @@ def compute_seg_dice_for_example(model, config, post_trans, examples):
                 label_path = os.path.join(img_dir, mod, f"{e}seg.nii.gz")
                 data = load_transform[i]({"image": image_path, "label": label_path})
 
-                # images.append(data["image"].unsqueeze(1))
-                # labels.append(data["label"].unsqueeze(1))
                 images.append(data["image"])
                 labels.append(data["label"])
-                
+
+            # images.append(data["image"].unsqueeze(1))
+            # labels.append(data["label"].unsqueeze(1))
+
+            image_tensor = torch.cat(images, dim=0).to(accelerator.device)
+            label_tensor = torch.cat(labels, dim=0).to(accelerator.device)
             result = {"image": image_tensor, "label": label_tensor}
             result = transforms(result)
-            
-            image_tensor = torch.cat(images, dim=1).to(accelerator.device)
-            label_tensor = torch.cat(labels, dim=1).to(accelerator.device)
+
+            image_tensor = result["image"].unsqueeze_(0)
+            label_tensor  = result["label"].unsqueeze_(0)
 
             # 2️⃣ 模型推理输出预测mask
             logits = model(image_tensor)
-            probs = torch.sigmoid(logits)
-            preds = (probs > 0.5).float()
+            probs = post_trans(logits)
+            # preds = (probs > 0.5).float()
 
-            # 3️⃣ 计算Dice分数
-            dice_metric(y_pred=preds, y=label_tensor)
-            dice_value = dice_metric.aggregate().item()
-            dice_metric.reset()
+            # # 3️⃣ 计算Dice分数
+            # dice_metric(y_pred=preds, y=label_tensor)
+            # dice_value = dice_metric.aggregate().item()
+            # dice_metric.reset()
+            _, dice_value = compute_dice_from_probs(probs, label_tensor)
 
             results.append([e, dice_value])
             accelerator.print(f"Dice for {e}: {dice_value:.4f}")
