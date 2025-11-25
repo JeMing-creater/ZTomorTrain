@@ -2,7 +2,7 @@ import os
 
 import test
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import sys
 import csv
 from datetime import datetime
@@ -61,6 +61,35 @@ def load_model(model, accelerator, checkpoint):
         accelerator.print(f"Failed to load checkpoint model!")
     return model
 
+
+def warm_up(
+    model: torch.nn.Module,
+    loss_functions: Dict[str, torch.nn.modules.loss._Loss],
+    train_loader: torch.utils.data.DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler._LRScheduler,
+    accelerator: Accelerator,
+):
+    # 训练
+    model.train()
+    for i, image_batch in enumerate(train_loader):
+        if config.trainer.choose_model == "HSL_Net":
+            _, logits = model(image_batch["image"])
+        else:
+            logits = model(image_batch["image"])
+        total_loss = 0
+        for name in loss_functions:
+            loss = loss_functions[name](logits, image_batch["label"])
+            total_loss += loss
+        accelerator.backward(total_loss)
+        optimizer.step()
+        optimizer.zero_grad()
+        accelerator.print(
+            f"Warm up [{i + 1}/{len(train_loader)}] Warm up Loss:{total_loss}",
+            flush=True,
+        )
+    scheduler.step(0)
+    return model
 
 @torch.no_grad()
 def val_one_epoch(
@@ -232,7 +261,10 @@ def compute_seg_dice_for_example(model, config, post_trans, examples):
             label_tensor  = result["label"].unsqueeze_(0)
 
             # 2️⃣ 模型推理输出预测mask
-            logits = model(image_tensor)
+            if config.trainer.choose_model == "HSL_Net":
+                _ , logits = model(image_tensor)
+            else:
+                logits = model(image_tensor)
             probs = post_trans(logits)
             # preds = (probs > 0.5).float()
 
@@ -290,7 +322,7 @@ if __name__ == "__main__":
     logging_dir = (
         os.getcwd()
         + "/logs/"
-        + checkpoint_name
+        + checkpoint_name + "_val_"
         + str(datetime.now())
         .replace(" ", "_")
         .replace("-", "_")
@@ -313,7 +345,7 @@ if __name__ == "__main__":
     model = load_model(model, accelerator, checkpoint_name)
 
     accelerator.print("load dataset...")
-    train_loader, val_loader, test_loader, example = get_dataloader(config)
+    train_loader, val_loader, test_loader, example = get_dataloader(config) 
 
     loss_functions = {
         "focal_loss": monai.losses.FocalLoss(to_onehot_y=False),
@@ -341,19 +373,46 @@ if __name__ == "__main__":
         ]
     )
 
-    model, train_loader, val_loader, test_loader = accelerator.prepare(
-        model, train_loader, val_loader, test_loader
-    )
-    
+
     inference = monai.inferers.SlidingWindowInferer(
         roi_size=config.GCNC_loader.target_size,
         overlap=0.5,
         sw_device=accelerator.device,
         device=accelerator.device,
     )
+    optimizer = optim_factory.create_optimizer_v2(
+        model,
+        opt=config.trainer.optimizer,
+        weight_decay=float(config.trainer.weight_decay),
+        lr=float(config.trainer.lr),
+        betas=(config.trainer.betas[0], config.trainer.betas[1]),
+    )
 
+    scheduler = LinearWarmupCosineAnnealingLR(
+        optimizer,
+        warmup_epochs=config.trainer.warmup,
+        max_epochs=config.trainer.num_epochs,
+    )
+
+    model, train_loader, val_loader, test_loader, optimizer, scheduler = accelerator.prepare(
+        model, train_loader, val_loader, test_loader, optimizer, scheduler
+    )
+    
+    model = warm_up(
+        model, loss_functions, train_loader, optimizer, scheduler, accelerator
+    )
+    
     # start valing
     accelerator.print("Start Valing! ")
+    # val_one_epoch(model,
+    #         inference,
+    #         train_loader,
+    #         metrics,
+    #         -1,
+    #         post_trans,
+    #         accelerator,
+    #         config,
+    #         test=False,)
     # val_one_epoch(model,
     #         inference,
     #         val_loader,
@@ -364,13 +423,14 @@ if __name__ == "__main__":
     #         config,
     #         test=False,)
     
-    # val_one_epoch(model,
-    #         inference,
-    #         test_loader,
-    #         metrics,
-    #         -1,
-    #         post_trans,
-    #         accelerator,
-    #         config,
-    #         test=False,)
-    compute_seg_dice_for_example(model, config, post_trans, example)
+    val_one_epoch(model,
+            inference,
+            test_loader,
+            metrics,
+            -1,
+            post_trans,
+            accelerator,
+            config,
+            test=False,)
+    
+    # compute_seg_dice_for_example(model, config, post_trans, example)

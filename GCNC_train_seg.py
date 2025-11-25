@@ -23,6 +23,7 @@ from src.utils import (
     write_example,
     load_model_dict,
     freeze_encoder_class,
+    reload_pre_train_model
 )
 
 # from src.model.HWAUNETR_seg import HWAUNETR as FMUNETR_seg
@@ -210,6 +211,9 @@ if __name__ == "__main__":
 
     accelerator.print("load model...")
     model = get_model(config)
+    
+    # if config.trainer.choose_model == "HSL_Net":
+    #     reload_pre_train_model(model, accelerator, "GCNC_SegmentationHSL_Net_pre")
 
     accelerator.print("load dataset...")
     train_loader, val_loader, test_loader, example = get_dataloader(config)

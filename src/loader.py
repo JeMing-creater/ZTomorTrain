@@ -1282,7 +1282,10 @@ def get_dataloader_GCNC(
 
     remove_list = config.GCNC_loader.leapfrog
     use_data = [item for item in use_data_list if item not in remove_list]
-
+    content_dict_new = {k: v for k, v in content_dict.items() if k not in remove_list}
+    content_dict = content_dict_new
+    
+    
     data, test_data, data_lack = load_MR_dataset_images(
         datapath,
         use_data,
