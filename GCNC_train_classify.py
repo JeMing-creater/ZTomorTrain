@@ -256,7 +256,7 @@ if __name__ == "__main__":
     model = get_model(config)
 
     if config.trainer.choose_model == "HSL_Net":
-        reload_pre_train_model(model, accelerator, "GCNC_SegmentationHSL_Net_pre")
+        reload_pre_train_model(model, accelerator, "GCNC_SegmentationHSL_Net_pre3")
 
     accelerator.print("load dataset...")
     train_loader, val_loader, test_loader, example = get_dataloader(config)

@@ -326,6 +326,47 @@ def read_csv_for_GCM(config):
     return content_dict1, content_dict2, content_dict3
 
 
+def read_csv_for_GICC(csv_path: str) -> List[Dict[str, str]]:
+    dtype_converters = {0: str}
+    train_df = pd.read_excel(
+        os.path.join(csv_path, "train.xlsx"), engine="openpyxl", dtype={0: str}, sheet_name="Sheet1"
+    )
+    val_df = pd.read_excel(
+        os.path.join(csv_path, "val.xlsx"), engine="openpyxl", dtype={0: str}, sheet_name="Sheet1"
+    )
+    test_df = pd.read_excel(
+        os.path.join(csv_path, "test.xlsx"), engine="openpyxl", dtype={4: str}, sheet_name="Sheet1"
+    )
+    
+    # 创建空字典
+    train_dict = {}
+    val_dict = {}
+    test_dict = {}
+    
+    # 遍历DataFrame的每一行，从第二行开始
+    for index, row in train_df.iterrows():
+        key = row[0]  # 第2列作为键
+        values = row[16]  # TODO: 随便找个值先填上，此处可以改读为分类标签
+        if pd.isna(values):   # NaN / None 都能识别
+            values = 0
+        train_dict[key] = [values]
+    
+    for index, row in val_df.iterrows():
+        key = row[0]  # 第2列作为键
+        values = row[14]  # TODO: 随便找个值先填上，此处可以改读为分类标签
+        if pd.isna(values):   # NaN / None 都能识别
+            values = 0
+        val_dict[key] = [values]
+    
+    for index, row in test_df.iterrows():
+        key = row[4]  # 第2列作为键
+        values = row[13]  # TODO: 随便找个值先填上，此处可以改读为分类标签
+        if pd.isna(values):   # NaN / None 都能识别
+            values = 0
+        test_dict[key] = [values]
+    
+    return train_dict, val_dict, test_dict
+
 def read_csv_for_GCNC(config):
 
     csv_path1 = config.GCNC_loader.root + "/" + "NPC_new.xlsx"
@@ -419,8 +460,11 @@ def load_MR_dataset_images(
         label = []
 
         for model in models:
-            if "WI" in model:
+            if "WI" in model and data_choose != "GCM":
                 check_model = model.replace("WI", "")
+            elif "WI" in model and data_choose == "GCM":
+                if "T2" in model:
+                    check_model = model.replace("WI", "_FS")
             elif model == "CT1":
                 check_model = "T1+C"
             elif model == "T1+c":
@@ -443,19 +487,31 @@ def load_MR_dataset_images(
                 image.append(root + "/" + path + "/" + model + "/" + path + ".nii.gz")
                 if not os.path.exists(
                     root + "/" + path + "/" + model + "/" + path + "seg.nii.gz"
-                ):
-                    print(f"Label file not found for {path} in model {model}. ")
-                    label.append(
-                        root + "/" + path + "/" + model + "/" + path + ".nii.gz"
-                    )
-                    lack_flag = True
+                ):  
+                    if os.path.exists(
+                    root + "/" + path + "/" + model + "/" + path + "seg.nii"):
+                        label.append(
+                            root + "/" + path + "/" + model + "/" + path + "seg.nii"
+                        )
+                    elif os.path.exists(
+                        root + "/" + path + "/" + model + "/" + path + "SEG.nii"
+                    ):
+                        label.append(
+                            root + "/" + path + "/" + model + "/" + path + "SEG.nii"
+                        )
+                    else:
+                        label.append(
+                            root + "/" + path + "/" + model + "/" + path + ".nii.gz"
+                        )
+                        print(f"Label file not found for {path} in model {model}. ")
+                        lack_flag = True
                 else:
                     label.append(
                         root + "/" + path + "/" + model + "/" + path + "seg.nii.gz"
                     )
 
         if image == [] or len(image) < len(use_models):
-            print(f"{path} does not have image file or not enough modals. ")
+            # print(f"{path} does not have image file or not enough modals. ")
             lack_model_flag = True
 
         if data_choose == "GCM":
@@ -645,6 +701,56 @@ def get_GCM_transforms(
                     Resized(
                         keys=["image", "label"],
                         spatial_size=config.GCM_loader.target_size,
+                        mode=("trilinear", "nearest-exact"),
+                    ),
+                    ScaleIntensityRanged(
+                        keys=["image"],  # 对图像应用变换
+                        a_min=model_scale[0],  # 输入图像的最小强度值
+                        a_max=model_scale[1],  # 输入图像的最大强度值
+                        b_min=0.0,  # 输出图像的最小强度值
+                        b_max=1.0,  # 输出图像的最大强度值
+                        clip=True,  # 是否裁剪超出范围的值
+                    ),
+                    ToTensord(keys=["image", "label"]),
+                ]
+            )
+        )
+
+    train_transform = monai.transforms.Compose(
+        [
+            # 训练集的额外增强
+            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
+            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
+            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
+            RandScaleIntensityd(keys="image", factors=0.1, prob=1.0),
+            RandShiftIntensityd(keys="image", offsets=0.1, prob=1.0),
+            # NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+            ToTensord(keys=["image", "label"]),
+        ]
+    )
+    val_transform = monai.transforms.Compose(
+        [
+            ToTensord(keys=["image", "label"]),
+        ]
+    )
+    return load_transform, train_transform, val_transform
+
+
+def get_GICC_transforms(
+    config: EasyDict,
+) -> Tuple[monai.transforms.Compose, monai.transforms.Compose]:
+    load_transform = []
+    for model_scale in config.GICC_loader.model_scale:
+        load_transform.append(
+            monai.transforms.Compose(
+                [
+                    LoadImaged(
+                        keys=["image", "label"], image_only=False, simple_keys=True
+                    ),
+                    EnsureChannelFirstd(keys=["image", "label"]),
+                    Resized(
+                        keys=["image", "label"],
+                        spatial_size=config.GICC_loader.target_size,
                         mode=("trilinear", "nearest-exact"),
                     ),
                     ScaleIntensityRanged(
@@ -942,8 +1048,12 @@ class MultiModalityDataset(monai.data.Dataset):
 
         combined_data = {}
 
+        
         for i in range(0, len(item["image"])):
             # print('Loading ', item['image'][i])
+            
+            print(f'Processing sample {item["image"][i]}')
+            
             globals()[f"data_{i}"] = self.loadforms[i](
                 {"image": item["image"][i], "label": item["label"][i]}
             )
@@ -1269,6 +1379,91 @@ def get_dataloader_GCM(
     )
 
 
+def get_dataloader_GICC(
+    config: EasyDict,
+) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
+    root = config.GICC_loader.root
+    datapath = root + "/" + "ALL" + "/"
+    use_models = config.GICC_loader.checkModels
+    # 读取数据集划分信息 / 去除不使用的样本
+    train_d, val_d, test_d = read_csv_for_GICC(root)
+    remove_list = config.GICC_loader.leapfrog
+    train_dict = {k: v for k, v in train_d.items() if k not in remove_list}
+    val_dict = {k: v for k, v in val_d.items() if k not in remove_list}
+    test_dict = {k: v for k, v in test_d.items() if k not in remove_list}
+    
+    train_use_data = list(train_dict.keys())
+    val_use_data = list(val_dict.keys())
+    test_use_data = list(test_dict.keys())
+    
+    # 不需要划分数据，直接加载
+    # 加载MR数据，形式上与GCM一致
+    # train_data, _ = load_MR_dataset_images(
+    #     datapath, train_use_data, use_models, train_dict, data_choose="GCM"
+    # )
+    # val_data, _ = load_MR_dataset_images(
+    #     datapath, val_use_data, use_models, val_dict, data_choose="GCM"
+    # )
+    test_data, _ = load_MR_dataset_images(
+        datapath, test_use_data, use_models, test_dict, data_choose="GCM"
+    )
+    
+    # 和胃癌共用数据增强
+    load_transform, train_transform, val_transform = get_GICC_transforms(config)
+    
+    train_example = check_example(train_data)
+    val_example = check_example(val_data)
+    test_example = check_example(test_data)
+
+    train_dataset = MultiModalityDataset(
+        data=train_data,
+        loadforms=load_transform,
+        transforms=train_transform,
+        data_choose="GCM",
+    )
+    val_dataset = MultiModalityDataset(
+        data=val_data,
+        loadforms=load_transform,
+        transforms=val_transform,
+        data_choose="GCM",
+    )
+    test_dataset = MultiModalityDataset(
+        data=test_data,
+        loadforms=load_transform,
+        transforms=val_transform,
+        data_choose="GCM",
+    )
+
+    train_loader = monai.data.DataLoader(
+        train_dataset,
+        num_workers=config.GICC_loader.num_workers,
+        batch_size=config.trainer.batch_size,
+        shuffle=True,
+    )
+    val_loader = monai.data.DataLoader(
+        val_dataset,
+        num_workers=config.GICC_loader.num_workers,
+        batch_size=config.trainer.batch_size,
+        shuffle=False,
+    )
+    test_loader = monai.data.DataLoader(
+        test_dataset,
+        num_workers=config.GICC_loader.num_workers,
+        batch_size=config.trainer.batch_size,
+        shuffle=False,
+    )
+
+    return (
+        train_loader,
+        val_loader,
+        test_loader,
+        (train_example, val_example, test_example),
+    )
+    
+    
+    
+    
+
 def get_dataloader_GCNC(
     config: EasyDict,
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
@@ -1510,55 +1705,38 @@ def get_dataloader_BraTS(
 if __name__ == "__main__":
     config = EasyDict(
         yaml.load(
-            open("/workspace/Jeming/GZ/config.yml", "r", encoding="utf-8"),
+            open("/workspace/Seg/config.yml", "r", encoding="utf-8"),
             Loader=yaml.FullLoader,
         )
     )
 
     # train_loader, val_loader, test_loader, _ = get_dataloader_GCM(config)
-    train_loader, val_loader, test_loader, _ = get_dataloader_GCNC(config)
+    train_loader, val_loader, test_loader, _ = get_dataloader_GICC(config)
+    # train_loader, val_loader, test_loader, _ = get_dataloader_GCNC(config)
     # train_loader, val_loader, test_loader, _ = get_dataloader_FS(config)
 
     # train_loader, val_loader, test_loader, _ = get_dataloader_FS(config)
-
-    conut = 0
-    f_count = 0
-
-    pd_l1_count = 0
-    pd_l1_f_count = 0
-
-    count = 0
-    for i, batch in enumerate(train_loader):
-        try:
-            # print(batch["image"].shape)
-            # print(batch["label"].shape)
-            count += 1
-        except Exception as e:
-            print(f"Error occurred while loading batch {i}: {e}")
-            continue
-
-    print(f"Total train batches: {count}")
-
-    count = 0
-    for i, batch in enumerate(val_loader):
-        try:
-            # print(batch["image"].shape)
-            # print(batch["label"].shape)
-            count += 1
-        except Exception as e:
-            print(f"Error occurred while loading batch {i}: {e}")
-            continue
-
-    print(f"Total val batches: {count}")
-
-    count = 0
-    for i, batch in enumerate(test_loader):
-        try:
-            # print(batch["image"].shape)
-            # print(batch["label"].shape)
-            count += 1
-        except Exception as e:
-            print(f"Error occurred while loading batch {i}: {e}")
-            continue
-
-    print(f"Total test batches: {count}")
+    
+    
+    train_count = 0
+    val_count = 0
+    test_count = 0
+    
+    # for batch_data in train_loader:
+    #     print(batch_data["image"].shape)
+    #     print(batch_data["label"].shape)
+    #     train_count += 1
+        
+    # for batch_data in val_loader:
+    #     print(batch_data["image"].shape)
+    #     print(batch_data["label"].shape)
+    #     val_count += 1
+        
+    for batch_data in test_loader:
+        print(batch_data["image"].shape)
+        print(batch_data["label"].shape)
+        test_count += 1
+    
+    print(f"Train batches: {train_count}")
+    print(f"val batches: {val_count}")
+    print(f"test batches: {test_count}")
