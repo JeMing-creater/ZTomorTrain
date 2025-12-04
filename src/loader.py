@@ -1707,7 +1707,7 @@ def get_dataloader_BraTS(
 if __name__ == "__main__":
     config = EasyDict(
         yaml.load(
-            open("/workspace/Seg/config.yml", "r", encoding="utf-8"),
+            open("/workspace/GZTumor/config.yml", "r", encoding="utf-8"),
             Loader=yaml.FullLoader,
         )
     )

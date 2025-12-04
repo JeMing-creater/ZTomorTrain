@@ -1,11 +1,11 @@
 trainer:
   choose_model: TFM_UNET_seg   # Class: [HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
-  task: Classification   # [Classification, Segmentation]
-  choose_dataset: GCNC   # [GCM, GCNC, GICC, FS, BraTS]
+  task: Segmentation   # [Classification, Segmentation]
+  choose_dataset: GICC   # [GCM, GCNC, GICC, FS, BraTS]
   num_epochs: 300
   seg_epochs: 300
   warmup: 2        
-  batch_size: 4
+  batch_size: 2
   resume: True
   # lr: 0.001
   lr: 0.0001

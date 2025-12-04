@@ -13,6 +13,8 @@ def get_model(config):
         use_config = config.GCM_loader
     elif config.trainer.choose_dataset == "GCNC":
         use_config = config.GCNC_loader
+    elif config.trainer.choose_dataset == "GICC":
+        use_config = config.GICC_loader
     elif config.trainer.choose_dataset == "FS":
         use_config = config.FS_loader
     
