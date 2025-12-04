@@ -1,11 +1,11 @@
 trainer:
-  choose_model: TFM_UNET_class   # Class: [HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
+  choose_model: TFM_UNET_seg   # Class: [HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
   task: Classification   # [Classification, Segmentation]
   choose_dataset: GCNC   # [GCM, GCNC, GICC, FS, BraTS]
   num_epochs: 300
   seg_epochs: 300
   warmup: 2        
-  batch_size: 1
+  batch_size: 4
   resume: True
   # lr: 0.001
   lr: 0.0001
@@ -50,7 +50,7 @@ GCM_loader:
   leapfrog: []
   root: /root/.cache/huggingface/forget/datasets/MeiMRNew/
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ['ADC','T2_FS']
+  checkModels: ['T2_FS', 'V']
   # model_scale: [[0, 6000], [0, 4500], [0, 4500]] # 对应模态的最小最大像素值，用于归一化
   model_scale: [[0, 6000],[0, 4500]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
@@ -80,12 +80,12 @@ GICC_loader:
   fusion: False
   num_workers: 0
   fix_example: False
-  leapfrog: ['0000592280', "0001294935"]
+  leapfrog: ['0000592280', "0001294935", "1639650", "1660860","1706388", "813032", "1619471", "103174", "65716","66238","90626","91458","91595","101770","114821","126104"]
   root: /mnt/liangjm/GICC/
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ['T2_FS', 'V']
+  checkModels: ['T2_FS','V']
   target_size: [128, 128, 64]
-  model_scale: [[0, 6000],[0, 6000]] 
+  model_scale: [[0, 6000],[0, 6000],[0, 6000]] 
 
 
 FS_loader:

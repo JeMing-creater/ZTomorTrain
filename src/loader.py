@@ -462,9 +462,11 @@ def load_MR_dataset_images(
         for model in models:
             if "WI" in model and data_choose != "GCM":
                 check_model = model.replace("WI", "")
-            elif "WI" in model and data_choose == "GCM":
-                if "T2" in model:
-                    check_model = model.replace("WI", "_FS")
+            # elif "WI" in model and data_choose == "GCM":
+            #     if "T2" in model:
+            #         check_model = model.replace("WI", "_FS")
+            elif "T2" in model and data_choose == "GCM":
+                check_model = "T2_FS"
             elif model == "CT1":
                 check_model = "T1+C"
             elif model == "T1+c":
@@ -511,7 +513,7 @@ def load_MR_dataset_images(
                     )
 
         if image == [] or len(image) < len(use_models):
-            # print(f"{path} does not have image file or not enough modals. ")
+            print(f"{path} does not have image file or not enough modals. ")
             lack_model_flag = True
 
         if data_choose == "GCM":
@@ -1398,12 +1400,12 @@ def get_dataloader_GICC(
     
     # 不需要划分数据，直接加载
     # 加载MR数据，形式上与GCM一致
-    # train_data, _ = load_MR_dataset_images(
-    #     datapath, train_use_data, use_models, train_dict, data_choose="GCM"
-    # )
-    # val_data, _ = load_MR_dataset_images(
-    #     datapath, val_use_data, use_models, val_dict, data_choose="GCM"
-    # )
+    train_data, _ = load_MR_dataset_images(
+        datapath, train_use_data, use_models, train_dict, data_choose="GCM"
+    )
+    val_data, _ = load_MR_dataset_images(
+        datapath, val_use_data, use_models, val_dict, data_choose="GCM"
+    )
     test_data, _ = load_MR_dataset_images(
         datapath, test_use_data, use_models, test_dict, data_choose="GCM"
     )
@@ -1722,15 +1724,15 @@ if __name__ == "__main__":
     val_count = 0
     test_count = 0
     
-    # for batch_data in train_loader:
-    #     print(batch_data["image"].shape)
-    #     print(batch_data["label"].shape)
-    #     train_count += 1
+    for batch_data in train_loader:
+        print(batch_data["image"].shape)
+        print(batch_data["label"].shape)
+        train_count += 1
         
-    # for batch_data in val_loader:
-    #     print(batch_data["image"].shape)
-    #     print(batch_data["label"].shape)
-    #     val_count += 1
+    for batch_data in val_loader:
+        print(batch_data["image"].shape)
+        print(batch_data["label"].shape)
+        val_count += 1
         
     for batch_data in test_loader:
         print(batch_data["image"].shape)
