@@ -1,11 +1,11 @@
 trainer:
-  choose_model: TFM_UNET_seg   # Class: [HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
+  choose_model: HWAUNETR   # Class: [HWAUNETR ,HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
   task: Classification   # [Classification, Segmentation]
-  choose_dataset: GCNC   # [GCM, GCNC, GICC, FS, BraTS]
+  choose_dataset: GCM   # [GCM, GCNC, GICC, FS, BraTS]
   num_epochs: 300
   seg_epochs: 300
   warmup: 2        
-  batch_size: 4
+  batch_size: 1
   resume: True
   # lr: 0.001
   lr: 0.0001
@@ -40,19 +40,18 @@ GCM_loader:
   over_label: False
   over_add: 10
   # use this flag can fix experiment examples, must set train_example.txt, val_example.txt and test_example.txt to root.
-  fix_example: True
+  fix_example: False
   # task: for different task: PM(腹膜转移分类) ; NL_SS(淋巴结同时序（手术）); NL_DS(淋巴结异时序（化疗后）)
-  task: PM
-  # task: NL_SS
-  # task: NL_DS
+  task: LM  # 淋巴结转移
+  # task: DS   # 腹隔膜转移
   # leapfrog: some data error can write in this list to remove from dataloader
   # leapfrog: ['0001902261', '0000439538','0002235469','0001308202']
   leapfrog: []
-  root: /root/.cache/huggingface/forget/datasets/MeiMRNew/
+  root: /root/.cache/huggingface/forget/datasets/GCM/
   # checkModels: ['A', 'ADC', 'T2_FS', 'V', 'DWI', 'P']
-  checkModels: ['T2_FS', 'V']
+  checkModels: ['ADC','T2_FS', 'V']
   # model_scale: [[0, 6000], [0, 4500], [0, 4500]] # 对应模态的最小最大像素值，用于归一化
-  model_scale: [[0, 6000],[0, 4500]] # 对应模态的最小最大像素值，用于归一化
+  model_scale: [[0, 6000],[0, 4500],[0, 4500]] # 对应模态的最小最大像素值，用于归一化
   target_size: [128, 128, 64]
 
 GCNC_loader:

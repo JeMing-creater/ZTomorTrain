@@ -17,7 +17,7 @@ from timm.optim import optim_factory
 from src import utils
 from src.loader import get_dataloader_GCM as get_dataloader
 from src.optimizer import LinearWarmupCosineAnnealingLR
-from src.utils import Logger, resume_train_state, write_example
+from src.utils import Logger, resume_train_state, write_example, reload_pre_train_model
 
 from get_model import get_model
 
@@ -80,7 +80,7 @@ def train_one_epoch(
         metric.update(metric_dice)
 
     accelerator.log(metric, step=epoch)
-    return step
+    return metric, step
 
 
 @torch.no_grad()
@@ -179,6 +179,9 @@ if __name__ == "__main__":
 
     accelerator.print("load model...")
     model = get_model(config)
+    
+    if config.trainer.choose_model == "TFM_UNET_seg":
+        reload_pre_train_model(model, accelerator, "GCM_SegmentationTFM_UNET_V4")
 
     accelerator.print("load dataset...")
     train_loader, val_loader, test_loader, example = get_dataloader(config)
@@ -284,7 +287,7 @@ if __name__ == "__main__":
     best_score = torch.Tensor([best_score]).to(accelerator.device)
     best_hd95 = torch.Tensor([best_hd95]).to(accelerator.device)
     for epoch in range(starting_epoch, config.trainer.num_epochs):
-        train_step = train_one_epoch(
+        train_batch, train_step = train_one_epoch(
             model,
             loss_functions,
             train_loader,
@@ -343,8 +346,9 @@ if __name__ == "__main__":
                     best_test_hd95_metrics,
                 ) = (dice_acc, dice_class, hd95_acc, hd95_class)
 
+        train_dice_acc = train_batch["Train/mean dice_metric"]
         accelerator.print(
-            f"Epoch [{epoch+1}/{config.trainer.num_epochs}] dice acc: {dice_acc} hd95_acc: {hd95_acc} best acc: {best_score}, best hd95: {best_hd95}, best test acc: {best_test_score}, best test hd95: {best_test_hd95}"
+            f"Epoch [{epoch+1}/{config.trainer.num_epochs}] train dice acc: {train_dice_acc}, dice acc: {dice_acc}, hd95_acc: {hd95_acc}, best acc: {best_score}, best hd95: {best_hd95}, best test acc: {best_test_score}, best test hd95: {best_test_hd95}"
         )
 
         accelerator.print("Cheakpoint...")

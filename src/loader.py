@@ -19,6 +19,7 @@ from typing import List, Dict, Any
 from monai.transforms import MapTransform
 sitk.ProcessObject.SetGlobalWarningDisplay(False)
 from typing import Tuple, List, Mapping, Hashable, Dict
+from monai.data import DataLoader, pad_list_data_collate
 from monai.transforms import (
     Compose,
     LoadImage,
@@ -1054,7 +1055,7 @@ class MultiModalityDataset(monai.data.Dataset):
         for i in range(0, len(item["image"])):
             # print('Loading ', item['image'][i])
             
-            print(f'Processing sample {item["image"][i]}')
+            # print(f'Processing sample {item["image"][i]}')
             
             globals()[f"data_{i}"] = self.loadforms[i](
                 {"image": item["image"][i], "label": item["label"][i]}
@@ -1258,16 +1259,18 @@ def get_dataloader_GCM(
 
     # data1: 腹膜转移分类; data2: 淋巴结同时序（手术）; data3: 淋巴结异时序（化疗后）
     data1, data2, data3 = read_csv_for_GCM(config)
-    if config.GCM_loader.task == "PM":
+    if config.GCM_loader.task == "DS":
         use_data_dict = data1
-    elif config.GCM_loader.task == "NL_SS":
-        use_data_dict = data2
+    elif config.GCM_loader.task == "LM":
+        use_data_dict = data2 | data3
+        use_data_dict.update(data2)
     else:
-        use_data_dict = data3
+        use_data_dict = data1
 
     # 按时间顺序划分数据集
-    use_data_list = sort_keys_by_time(use_data_dict)
-
+    # use_data_list = sort_keys_by_time(use_data_dict)
+    use_data_list = use_data_dict.keys()
+    
     # 剔除不需要的病历号
     remove_list = config.GCM_loader.leapfrog
     use_data = [item for item in use_data_list if item not in remove_list]
@@ -1441,18 +1444,21 @@ def get_dataloader_GICC(
         num_workers=config.GICC_loader.num_workers,
         batch_size=config.trainer.batch_size,
         shuffle=True,
+        collate_fn=pad_list_data_collate,
     )
     val_loader = monai.data.DataLoader(
         val_dataset,
         num_workers=config.GICC_loader.num_workers,
         batch_size=config.trainer.batch_size,
         shuffle=False,
+        collate_fn=pad_list_data_collate,
     )
     test_loader = monai.data.DataLoader(
         test_dataset,
         num_workers=config.GICC_loader.num_workers,
         batch_size=config.trainer.batch_size,
         shuffle=False,
+        collate_fn=pad_list_data_collate,
     )
 
     return (
@@ -1707,13 +1713,13 @@ def get_dataloader_BraTS(
 if __name__ == "__main__":
     config = EasyDict(
         yaml.load(
-            open("/workspace/Seg/config.yml", "r", encoding="utf-8"),
+            open("/workspace/GZ_Tumor/config.yml", "r", encoding="utf-8"),
             Loader=yaml.FullLoader,
         )
     )
 
-    # train_loader, val_loader, test_loader, _ = get_dataloader_GCM(config)
-    train_loader, val_loader, test_loader, _ = get_dataloader_GICC(config)
+    train_loader, val_loader, test_loader, _ = get_dataloader_GCM(config)
+    # train_loader, val_loader, test_loader, _ = get_dataloader_GICC(config)
     # train_loader, val_loader, test_loader, _ = get_dataloader_GCNC(config)
     # train_loader, val_loader, test_loader, _ = get_dataloader_FS(config)
 
@@ -1727,16 +1733,23 @@ if __name__ == "__main__":
     for batch_data in train_loader:
         print(batch_data["image"].shape)
         print(batch_data["label"].shape)
+        print(batch_data["class_label"].shape)
+        print(batch_data["class_label"].max())
+        
         train_count += 1
         
     for batch_data in val_loader:
         print(batch_data["image"].shape)
         print(batch_data["label"].shape)
+        print(batch_data["class_label"].shape)
+        print(batch_data["class_label"].max())
         val_count += 1
         
     for batch_data in test_loader:
         print(batch_data["image"].shape)
         print(batch_data["label"].shape)
+        print(batch_data["class_label"].shape)
+        print(batch_data["class_label"].max())
         test_count += 1
     
     print(f"Train batches: {train_count}")

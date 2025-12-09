@@ -503,6 +503,8 @@ def write_example(config, example):
         data_root = config.GCM_loader.root
     elif config.trainer.choose_dataset == "GCNC":
         data_root = config.GCNC_loader.root
+    elif config.trainer.choose_dataset == "GICC":
+        data_root = config.GICC_loader.root
     elif config.trainer.choose_dataset == "FS":
         data_root = config.FS_loader.root
     
@@ -560,17 +562,17 @@ def copy_file(src_file: str, dst_dir: str) -> None:
 
 def freeze_seg_decoder(model):
     """
-    冻结 Seg_Decoder 模块的所有参数，适配 accelerate 多卡训练
+    冻结 除 Class_Decoder 外模块的所有参数，适配 accelerate 多卡训练
     """
     for name, param in model.named_parameters():
-        if "Seg_Decoder" in name or "Encoder" in name:
+        if "Class_Decoder" not in name:
             param.requires_grad = False  # 停止梯度更新
             if param.grad is not None:
                 param.grad.detach_()  # 清理梯度，防止错误同步
 
     # 强制设置 eval 模式，防止 BN、Dropout 引发 DDP 不一致
-    if hasattr(model, "Class_Decoder"):
-        model.Class_Decoder.eval()
+    if hasattr(model, "Seg_Decoder"):
+        model.Seg_Decoder.eval()
 
     if hasattr(model, "Encoder"):
         model.Encoder.eval()
