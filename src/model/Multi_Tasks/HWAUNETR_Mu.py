@@ -351,7 +351,96 @@ class HWABlock(nn.Module):
         # x = now_tensor.transpose(-1, -2).reshape(B, C, *img_dims)
             
         return x
-         
+
+class ScaleAttnSelfROIClsHead3D(nn.Module):
+    """
+    输入: feats = [f1,f2,f3,f4]
+    输出: logit (B,1)
+    
+    特点:
+    - 只用 decoder 多尺度特征
+    - 每尺度内部自生成软ROI注意力(attn_i)
+    - 注意力加权池化 + 尺度注意力融合
+    """
+    def __init__(
+        self,
+        in_chs=(48, 96, 192, 384),
+        proj_ch=128,
+        attn_hidden=256,
+        cls_hidden=256,
+        dropout=0.2,
+        eps=1e-6,
+    ):
+        super().__init__()
+        self.eps = eps
+
+        # 统一通道
+        self.proj = nn.ModuleList([
+            nn.Conv3d(c, proj_ch, kernel_size=1, bias=False)
+            for c in in_chs
+        ])
+        self.norm = nn.ModuleList([
+            nn.InstanceNorm3d(proj_ch, affine=True)
+            for _ in in_chs
+        ])
+
+        # 每个尺度一个“自ROI注意力”生成器
+        # 用 1x1x1 conv -> sigmoid 得到 (B,1,Di,Hi,Wi)
+        self.spatial_attn = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv3d(proj_ch, proj_ch // 4, kernel_size=1, bias=True),
+                nn.ReLU(inplace=True),
+                nn.Conv3d(proj_ch // 4, 1, kernel_size=1, bias=True)
+            )
+            for _ in in_chs
+        ])
+
+        # 尺度注意力权重
+        self.scale_fc = nn.Sequential(
+            nn.Linear(proj_ch * len(in_chs), attn_hidden),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(attn_hidden, len(in_chs))
+        )
+
+        # 分类 MLP
+        self.cls_fc = nn.Sequential(
+            nn.Linear(proj_ch, cls_hidden),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(cls_hidden, 1)
+        )
+
+    def _attn_pool(self, feat, attn):
+        """
+        feat: (B,C,D,H,W)
+        attn: (B,1,D,H,W) in [0,1]
+        return: (B,C)
+        """
+        wfeat = feat * attn
+        num = wfeat.sum(dim=(2,3,4))                      # (B,C)
+        den = attn.sum(dim=(2,3,4)).clamp_min(self.eps)   # (B,1)
+        return num / den
+
+    def forward(self, feats):
+        assert len(feats) == 4, "Expect 4-scale features."
+
+        vecs = []
+        for f, p, n, a in zip(feats, self.proj, self.norm, self.spatial_attn):
+            g = n(p(f))                       # (B,proj_ch,Di,Hi,Wi)
+            attn_i = torch.sigmoid(a(g))      # (B,1,Di,Hi,Wi) 软ROI
+            v_i = self._attn_pool(g, attn_i)  # (B,proj_ch)
+            vecs.append(v_i)
+
+        # scale attention 跨尺度融合
+        v_cat = torch.cat(vecs, dim=1)                     # (B,4*proj_ch)
+        scale_attn = torch.softmax(self.scale_fc(v_cat), dim=1)  # (B,4)
+        v_stack = torch.stack(vecs, dim=1)                 # (B,4,proj_ch)
+        v_fused = (scale_attn.unsqueeze(-1) * v_stack).sum(dim=1) # (B,proj_ch)
+
+        logit = self.cls_fc(v_fused)  # (B,1)
+        return logit
+    
 class HWAUNETR(nn.Module):
     def __init__(self, in_chans=4, out_chans=3, fussion = [1,2,4,8], kernel_sizes=[4, 2, 2, 2], depths=[1, 1, 1, 1], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8],
                 out_indices=[0, 1, 2, 3]):
@@ -370,6 +459,9 @@ class HWAUNETR(nn.Module):
 
         self.SegHead = nn.ConvTranspose3d(dims[0],out_chans,kernel_size=kernel_sizes[0],stride=kernel_sizes[0])
         
+        self.Class_Decoder = ScaleAttnSelfROIClsHead3D(in_chs=dims[::-1], proj_ch=128, attn_hidden=256, cls_hidden=256, dropout=0.2)
+        
+        
     def forward(self, x):
         x = self.fussion(x)
         
@@ -377,13 +469,32 @@ class HWAUNETR(nn.Module):
         
         deep_feature = self.hidden_downsample(outs)
         
+        
+        up_feature = []
+        
         x = self.TSconv1(deep_feature, feature_out[-1])
+        up_feature.append(x)
+        
         x = self.TSconv2(x, feature_out[-2])
+        up_feature.append(x)
+        
         x = self.TSconv3(x, feature_out[-3])
+        up_feature.append(x)
+        
         x = self.TSconv4(x, feature_out[-4])
+        up_feature.append(x)
+        
         x = self.SegHead(x)
         
-        return x
+        # print(up_feature[0].shape)
+        # print(up_feature[1].shape)
+        # print(up_feature[2].shape)
+        # print(up_feature[3].shape)
+        
+        
+        c_x = self.Class_Decoder(up_feature)
+        
+        return x, c_x
     
 def test_weight(model, x):
     for i in range(0, 3):
@@ -403,14 +514,16 @@ def Unitconversion(flops, params, throughout):
     print('flop : {} G'.format(round(flops / (1000**3), 2)))
     print('throughout: {} FPS'.format(throughout))
 
+
+
+
 if __name__ == '__main__':
     device = 'cuda'
-    # x = torch.randn(size=(1, 4, 96, 96, 96)).to(device)
-    # x = torch.randn(size=(1, 4, 128, 128, 128)).to(device)
     x = torch.randn(size=(2, 3, 128, 128, 64)).to(device)
-    # model = SegMamba(in_chans=4,out_chans=3).to(device)
     
     model = HWAUNETR(in_chans=3, out_chans=3, fussion = [1, 2, 4, 8], kernel_sizes=[4, 2, 2, 2], depths=[2, 2, 2, 2], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8], out_indices=[0, 1, 2, 3]).to(device)
 
-    print(model(x).shape)
+    segx, classx = model(x)
+    print(segx.shape)
+    print(classx.shape)
     

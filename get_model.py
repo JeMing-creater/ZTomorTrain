@@ -5,6 +5,7 @@ from src.model.Class.ResNet import resnet50
 from src.model.Class.Vit import Vit as Vit
 from src.model.Class.TP_Mamba import SAM_MS
 from src.model.Multi_Tasks.HSL_Net import HSL_Net
+from src.model.Multi_Tasks.HWAUNETR_Mu import HWAUNETR
 
 
 def get_model(config):
@@ -35,6 +36,13 @@ def get_model(config):
         )
         print("HSL_Net for multitask")
         return model
+    elif "HWAUNETR" in config.trainer.choose_model:
+        model = HWAUNETR(
+            in_chans=len(use_config.checkModels),
+            out_chans=len(use_config.checkModels),
+            fussion = [1, 2, 4, 8], kernel_sizes=[4, 2, 2, 2], depths=[2, 2, 2, 2], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8], out_indices=[0, 1, 2, 3]
+        )
+        return model
     
     # Single task choose model return now
     if config.trainer.task == "Segmentation":
@@ -42,14 +50,7 @@ def get_model(config):
             model = TFM_UNET_seg(
                 in_chans=len(use_config.checkModels),
                 out_chans=len(use_config.checkModels),
-                fussion=[1, 2, 4, 8],
-                kernel_sizes=[4, 2, 2, 2],
-                depths=[1, 1, 1, 1],
-                dims=[48, 96, 192, 384],
-                heads=[1, 2, 4, 4],
-                hidden_size=768,
-                num_slices_list=[64, 32, 16, 8],
-                out_indices=[0, 1, 2, 3],
+                fussion = [1, 2, 4, 8], kernel_sizes=[4, 2, 2, 2], depths=[2, 2, 2, 2], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8], out_indices=[0, 1, 2, 3]
             )
             print("TFM_UNET for segmentation")
         elif "SwinUNETR" in config.trainer.choose_model:

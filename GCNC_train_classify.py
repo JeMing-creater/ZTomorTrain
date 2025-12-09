@@ -59,7 +59,8 @@ def train_one_epoch(
 ):
     # 训练
     model.train()
-    freeze_seg_decoder(model)
+    if config.trainer.choose_model == "HSL_Net":
+        freeze_seg_decoder(model)
     accelerator.print(f"Training...", flush=True)
     loop = tqdm(enumerate(train_loader), total=len(train_loader))
     # for i, image_batch in enumerate(train_loader):

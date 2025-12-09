@@ -1,4 +1,3 @@
-from math import e
 import os
 
 # os.environ['CUDA_VISIBLE_DEVICES'] = "0"
@@ -21,7 +20,7 @@ from timm.optim import optim_factory
 from src import utils
 from src.loader import get_dataloader_GCM as get_dataloader
 from src.optimizer import LinearWarmupCosineAnnealingLR
-from src.utils import Logger, write_example, resume_train_state, split_metrics,reload_pre_train_model,freeze_seg_decoder
+from src.utils import Logger, write_example, resume_train_state, split_metrics, reload_pre_train_model
 from src.eval import (
     calculate_f1_score,
     specificity,
@@ -59,13 +58,7 @@ def train_one_epoch(
     # for i, image_batch in enumerate(train_loader):
     for i, image_batch in loop:
         # for i, image_batch in enumerate(train_loader):
-        
-        if config.trainer.choose_model == "HWAUNETR" or config.trainer.choose_model == "HSL_Net":
-            _, logits = model(image_batch["image"])
-        else:
-            logits = model(
-                image_batch["image"]
-            )  # some moedls can not accepted inference, I do not know why.
+        logits = model(image_batch["image"])
         total_loss = 0
         logits_loss = logits
         labels = image_batch["class_label"]
@@ -154,12 +147,9 @@ def val_one_epoch(
     # for i, image_batch in enumerate(val_loader):
     for i, image_batch in loop:
         # logits = inference(model, image_batch['image'])
-        if config.trainer.choose_model == "HWAUNETR" or config.trainer.choose_model == "HSL_Net":
-            _, logits = model(image_batch["image"])
-        else:
-            logits = model(
-                image_batch["image"]
-            )  # some moedls can not accepted inference, I do not know why.
+        logits = model(
+            image_batch["image"]
+        )  # some moedls can not accepted inference, I do not know why.
         log = ""
         total_loss = 0
 
@@ -245,174 +235,5 @@ if __name__ == "__main__":
 
     accelerator.print("load model...")
     model = get_model(config)
-    if config.trainer.choose_model == "HWAUNETR":
-        reload_pre_train_model(model, accelerator, "GCM_SegmentationTFM_UNET_seg")
-        freeze_seg_decoder(model)
-
-    accelerator.print("load dataset...")
-    train_loader, val_loader, test_loader, example = get_dataloader(config)
-
-    # keep example log
-    if accelerator.is_main_process == True:
-        write_example(config, example)
-
-    inference = monai.inferers.SlidingWindowInferer(
-        roi_size=config.GCM_loader.target_size,
-        overlap=0.5,
-        sw_device=accelerator.device,
-        device=accelerator.device,
-    )
-
-    loss_functions = {
-        "focal_loss": monai.losses.FocalLoss(to_onehot_y=False),
-        "bce_loss": nn.BCEWithLogitsLoss().to(accelerator.device),
-    }
-
-    metrics = {
-        "accuracy": monai.metrics.ConfusionMatrixMetric(
-            include_background=False, metric_name="accuracy"
-        ),
-        "f1": monai.metrics.ConfusionMatrixMetric(
-            include_background=False, metric_name="f1 score"
-        ),
-        "specificity": monai.metrics.ConfusionMatrixMetric(
-            include_background=False, metric_name="specificity"
-        ),
-        "recall": monai.metrics.ConfusionMatrixMetric(
-            include_background=False, metric_name="recall"
-        ),
-        "miou_metric": monai.metrics.MeanIoU(include_background=False),
-    }
-
-    post_trans = monai.transforms.Compose(
-        [
-            monai.transforms.Activations(sigmoid=True),
-            monai.transforms.AsDiscrete(threshold=0.5),
-        ]
-    )
-
-    optimizer = optim_factory.create_optimizer_v2(
-        model,
-        opt=config.trainer.optimizer,
-        weight_decay=float(config.trainer.weight_decay),
-        lr=float(config.trainer.lr),
-        betas=(config.trainer.betas[0], config.trainer.betas[1]),
-    )
-
-    scheduler = LinearWarmupCosineAnnealingLR(
-        optimizer,
-        warmup_epochs=config.trainer.warmup,
-        max_epochs=config.trainer.num_epochs,
-    )
-
-    # start training
-    accelerator.print("Start Training! ")
-    train_step = 0
-    best_eopch = -1
-    val_step = 0
-    best_accuracy = torch.tensor(0)
-    best_metrics = {}
-    best_test_accuracy = torch.tensor(0)
-    best_test_metrics = {}
-
-    starting_epoch = 0
-
-    if config.trainer.resume:
-        (
-            model,
-            optimizer,
-            scheduler,
-            starting_epoch,
-            train_step,
-            best_accuracy,
-            best_test_accuracy,
-            best_metrics,
-            best_test_metrics,
-        ) = utils.resume_train_state(
-            model,
-            "{}".format(checkpoint_name),
-            optimizer,
-            scheduler,
-            train_loader,
-            accelerator,
-            seg=False,
-        )
-        val_step = train_step
-
-    model, optimizer, scheduler, train_loader, val_loader, test_loader = (
-        accelerator.prepare(
-            model, optimizer, scheduler, train_loader, val_loader, test_loader
-        )
-    )
-
-    best_accuracy = torch.Tensor([best_accuracy]).to(accelerator.device)
-    best_test_accuracy = torch.Tensor([best_test_accuracy]).to(accelerator.device)
-
-    for epoch in range(starting_epoch, config.trainer.num_epochs):
-        train_metric, train_step = train_one_epoch(
-            model,
-            loss_functions,
-            train_loader,
-            optimizer,
-            scheduler,
-            metrics,
-            post_trans,
-            accelerator,
-            epoch,
-            train_step,
-        )
-
-        final_metrics, val_step = val_one_epoch(
-            model, inference, val_loader, metrics, val_step, post_trans, accelerator
-        )
-
-        val_top = final_metrics["Val/accuracy"]
-
-        # 保存模型
-        if val_top > best_accuracy:
-            accelerator.save_state(
-                output_dir=f"{os.getcwd()}/model_store/{checkpoint_name}/best"
-            )
-            best_accuracy = final_metrics["Val/accuracy"]
-            best_metrics = final_metrics
-            # 记录最优test acc
-            if config.GCM_loader.fusion == False:
-                final_metrics, _ = val_one_epoch(
-                    model,
-                    inference,
-                    test_loader,
-                    metrics,
-                    -1,
-                    post_trans,
-                    accelerator,
-                    test=True,
-                )
-                best_test_accuracy = final_metrics["Test/accuracy"]
-                best_test_metrics = final_metrics
-            else:
-                final_metrics = final_metrics
-
-                best_test_accuracy = final_metrics["Val/accuracy"]
-                best_test_metrics = final_metrics
-
-        accelerator.print(
-            f'Epoch [{epoch+1}/{config.trainer.num_epochs}] now train acc: {train_metric["Train/accuracy"]}, now val acc: {val_top}, best acc: {best_accuracy}, best test acc: {best_test_accuracy}'
-        )
-
-        accelerator.print("Cheakpoint...")
-        accelerator.save_state(
-            output_dir=f"{os.getcwd()}/model_store/{checkpoint_name}/checkpoint"
-        )
-        torch.save(
-            {
-                "epoch": epoch,
-                "best_accuracy": best_accuracy,
-                "best_metrics": best_metrics,
-                "best_test_accuracy": best_test_accuracy,
-                "best_test_metrics": best_test_metrics,
-            },
-            f"{os.getcwd()}/model_store/{checkpoint_name}/checkpoint/epoch.pth.tar",
-        )
-
-    accelerator.print(f"best test accuracy: {best_test_accuracy}")
-    accelerator.print(f"best metrics: {best_test_metrics}")
+    
+    reload_pre_train_model(model, accelerator, "GCM_SegmentationTFM_UNET_seg")
