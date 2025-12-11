@@ -155,7 +155,7 @@ def val_one_epoch(
     for i, image_batch in loop:
         # logits = inference(model, image_batch['image'])
         if config.trainer.choose_model == "HWAUNETR" or config.trainer.choose_model == "HSL_Net":
-            _, logits = model(image_batch["image"])
+            logits, _ = model(image_batch["image"])
         else:
             logits = model(
                 image_batch["image"]

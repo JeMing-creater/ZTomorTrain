@@ -309,6 +309,9 @@ if __name__ == "__main__":
     )
     utils.same_seeds(50)
 
+    config.trainer.task = "Segmentation"
+    config.trainer.choose_dataset = "GCNC"
+    
     if config.finetune.GCNC.checkpoint != "None":
         checkpoint_name = config.finetune.GCNC.checkpoint
     else:

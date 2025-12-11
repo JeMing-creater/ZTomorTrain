@@ -37,7 +37,13 @@ def train_one_epoch(
     # 训练
     model.train()
     for i, image_batch in enumerate(train_loader):
-        logits = model(image_batch["image"])
+        if config.trainer.choose_model == "HWAUNETR" or config.trainer.choose_model == "HSL_Net":
+            _, logits = model(image_batch["image"])
+        else:
+            logits = model(
+                image_batch["image"]
+            )  # some moedls can not accepted inference, I do not know why.
+        
         total_loss = 0
         log = ""
         for name in loss_functions:
@@ -101,7 +107,13 @@ def val_one_epoch(
     hd95_acc = 0
     hd95_class = []
     for i, image_batch in enumerate(val_loader):
-        logits = inference(image_batch["image"], model)
+        if config.trainer.choose_model == "HWAUNETR" or config.trainer.choose_model == "HSL_Net":
+            _, logits = model(image_batch["image"])
+        else:
+            logits = model(
+                image_batch["image"]
+            )  # some moedls can not accepted inference, I do not know why
+            
         val_outputs = post_trans(logits)
         for metric_name in metrics:
             metrics[metric_name](y_pred=val_outputs, y=image_batch["label"])
