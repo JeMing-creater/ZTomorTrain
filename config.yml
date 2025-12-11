@@ -1,6 +1,6 @@
 trainer:
   choose_model: HWAUNETR   # Class: [HWAUNETR ,HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
-  task: Classification   # [Classification, Segmentation]
+  task: Segmentation   # [Classification, Segmentation]
   choose_dataset: GCM   # [GCM, GCNC, GICC, FS, BraTS]
   num_epochs: 300
   seg_epochs: 300
@@ -18,7 +18,7 @@ trainer:
 
 finetune:
   GCM:
-    checkpoint: None
+    checkpoint: GCM_SegmentationTFM_UNET_V4
   GCNC:
     checkpoint: None
   GICC:
@@ -33,14 +33,14 @@ GCM_loader:
   val_ratio: 0.1
   test_ratio: 0.2
   # fusion: do you need test dataset? if not, can use fusion to fuse val and test data to one dataloader.
-  fusion: True
+  fusion: False
   # split dataset based on check time or not.
   time_limit: False
   num_workers: 0
   over_label: False
   over_add: 10
   # use this flag can fix experiment examples, must set train_example.txt, val_example.txt and test_example.txt to root.
-  fix_example: False
+  fix_example: True
   # task: for different task: PM(腹膜转移分类) ; NL_SS(淋巴结同时序（手术）); NL_DS(淋巴结异时序（化疗后）)
   task: LM  # 淋巴结转移
   # task: DS   # 腹隔膜转移

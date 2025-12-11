@@ -1,6 +1,6 @@
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import sys
 import csv
 from datetime import datetime
@@ -40,7 +40,6 @@ from src.eval import (
     accumulate_metrics,
     compute_final_metrics,
 )
-
 
 from get_model import get_model
 
@@ -115,60 +114,7 @@ def val_one_epoch(
     return
 
 
-@torch.no_grad()
-def compute_dl_score_for_example(model, config, post_trans, examples):
-
-    def compute_for_sinlge_example(post_trans, example):
-        dl_score = {}
-        lable_score = {}
-        load_transform, _, _ = get_transforms(config)
-        for e in example:
-            choose_image = config.GCM_loader.root + "/" + "ALL" + "/" + f"{e}"
-            accelerator.print("valing for image: ", choose_image)
-
-            images = []
-            labels = []
-            for i in range(len(config.GCM_loader.checkModels)):
-                image_path = (
-                    choose_image
-                    + "/"
-                    + config.GCM_loader.checkModels[i]
-                    + "/"
-                    + f"{e}.nii.gz"
-                )
-                label_path = (
-                    choose_image
-                    + "/"
-                    + config.GCM_loader.checkModels[i]
-                    + "/"
-                    + f"{e}seg.nii.gz"
-                )
-
-                batch = load_transform[i]({"image": image_path, "label": label_path})
-                images.append(batch["image"].unsqueeze(1))
-                labels.append(batch["label"].unsqueeze(1))
-
-            image_tensor = torch.cat(images, dim=1).to(accelerator.device)
-            # label_tensor = torch.cat(labels, dim=1)
-
-            logits = model(image_tensor)
-            probs = logits
-            # probs = torch.sigmoid(logits).cpu().numpy().flatten()
-            # probs = torch.softmax(logits, dim=-1).cpu().numpy().flatten()
-            # dl_score[e] = logits.item()
-            dl_s = probs.item()
-            l = post_trans(logits).item()
-            # if dl_s >= 1:
-            #     dl_s = 1.0
-            # elif dl_s < 0.0001:
-            #     dl_s = 0.0001
-            dl_score[e] = dl_s
-            lable_score[e] = l
-            # gt_score[e] =
-        return dl_score, lable_score
-
-    # 6. 定义一个函数，对 DL-scores 进行正态化
-    def normalize_dl_scores(dl_scores):
+def normalize_dl_scores(dl_scores):
         """
         正态化 DL-scores，并确保它们保持在 [0, 1] 区间内
         """
@@ -186,31 +132,14 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
         normalized_scores = {
             k: 1 / (1 + np.exp(-v)) for k, v in standardized_scores.items()
         }
+        
+            
 
         return normalized_scores
 
-    def write_to_csv(dl_score, lable_score, csv_path, use_data_dict):
-        # 判断路径是否存在
-        dir_path = os.path.dirname(csv_path)
-        if not os.path.exists(dir_path):
-            os.makedirs(dir_path, exist_ok=True)
-            print(f"dir {dir_path} has been created!")
-        else:
-            print(f"dir {dir_path} existed!")
 
-        with open(csv_path, mode="w", newline="") as file:
-            writer = csv.writer(file)
-
-            # 写入表头
-            writer.writerow(["Key", "Value", "Label", "Ground Truth"])
-
-            # 遍历字典并写入键值对
-            for key, value in dl_score.items():
-                writer.writerow(
-                    [str(key), value, lable_score[key], use_data_dict[key][0]]
-                )
-
-    def change_to_xlxs(csv_file, save_path):
+def write_to_xlsx(dl_score, lable_score, real_label_score, csv_name):
+    def change_to_xlsx(csv_file, save_path):
         df = pd.read_csv(csv_file, dtype={0: str})
 
         # 清理病人编号列中的前后空格
@@ -220,58 +149,106 @@ def compute_dl_score_for_example(model, config, post_trans, examples):
         df.to_excel(save_path, index=False, engine="openpyxl")
 
         os.remove(csv_file)
-
-    data1, data2, data3 = read_csv_for_GCM(config)
-
-    if config.GCM_loader.task == "PM":
-        use_data_dict = data1
-    elif config.GCM_loader.task == "NL_SS":
-        use_data_dict = data2
+    
+    csv_path = csv_name + ".csv"
+    # 判断路径是否存在
+    dir_path = os.path.dirname(csv_path)
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path, exist_ok=True)
+        print(f"dir {dir_path} has been created!")
     else:
-        use_data_dict = data3
+        print(f"dir {dir_path} existed!")
 
-    train_example, val_example, test_example = examples
-    tr_dl_score, tr_label = compute_for_sinlge_example(post_trans, train_example)
-    val_dl_score, val_label = compute_for_sinlge_example(post_trans, val_example)
-    te_dl_score, te_label = compute_for_sinlge_example(post_trans, test_example)
+    with open(csv_path, mode="w", newline="") as file:
+        writer = csv.writer(file)
 
-    tr_dl_score = normalize_dl_scores(tr_dl_score)
-    val_dl_score = normalize_dl_scores(val_dl_score)
-    te_dl_score = normalize_dl_scores(te_dl_score)
+        # 写入表头
+        writer.writerow(["Key", "Value", "Label", "Ground Truth"])
 
-    write_to_csv(
-        tr_dl_score,
-        tr_label,
-        os.path.join(config.valer.dl_score_csv_path, "train_dl_score.csv"),
-        use_data_dict,
-    )
-    write_to_csv(
-        val_dl_score,
-        val_label,
-        os.path.join(config.valer.dl_score_csv_path, "val_dl_score.csv"),
-        use_data_dict,
-    )
-    write_to_csv(
-        te_dl_score,
-        te_label,
-        os.path.join(config.valer.dl_score_csv_path, "test_dl_score.csv"),
-        use_data_dict,
-    )
+        # 遍历字典并写入键值对
+        for key, value in dl_score.items():
+            writer.writerow(
+                [str(key), value, lable_score[key], real_label_score[key]]
+            )
 
-    change_to_xlxs(
-        os.path.join(config.valer.dl_score_csv_path, "train_dl_score.csv"),
-        os.path.join(config.valer.dl_score_csv_path, "train_dl_score.xlsx"),
+    xlsx_path = csv_name + ".xlsx"
+    change_to_xlsx(
+        os.path.join(csv_path),
+        os.path.join(xlsx_path),
     )
-    change_to_xlxs(
-        os.path.join(config.valer.dl_score_csv_path, "val_dl_score.csv"),
-        os.path.join(config.valer.dl_score_csv_path, "val_dl_score.xlsx"),
-    )
-    change_to_xlxs(
-        os.path.join(config.valer.dl_score_csv_path, "test_dl_score.csv"),
-        os.path.join(config.valer.dl_score_csv_path, "test_dl_score.xlsx"),
-    )
+    
 
-    return tr_dl_score, val_dl_score, te_dl_score
+@torch.no_grad()
+def val_dl_score(
+    model: torch.nn.Module,
+    val_loader: torch.utils.data.DataLoader,
+    metrics: Dict[str, monai.metrics.CumulativeIterationMetric],
+    post_trans: monai.transforms.Compose,
+    accelerator: Accelerator,
+    name: str = "train"
+):
+    # 验证
+    model.eval()
+    dl_score = {}
+    dl_label = {}
+    real_label = {}
+    for i, image_batch in enumerate(val_loader):
+        fname = image_batch["image"].meta["filename_or_obj"][0].split('/')[-1].split("/")[-1].split(".")[0]
+        
+        if config.trainer.choose_model == "HWAUNETR" or config.trainer.choose_model == "HSL_Net":
+            logits, _ = model(image_batch["image"])
+        else:
+            logits = model(
+                image_batch["image"]
+            )  # some moedls can not accepted inference, I do not know why.
+
+        
+        log = ""
+        
+        dl_score[fname] = float(torch.sigmoid(logits).cpu().numpy())
+        
+        labels_loss = image_batch["class_label"]
+        
+        
+        for metric_name in metrics:
+            y_pred = post_trans(logits)
+            y = labels_loss
+            if metric_name == "miou_metric":
+                y_pred = y_pred.unsqueeze(2)
+                y = y.unsqueeze(2)
+            metrics[metric_name](y_pred=y_pred, y=y)
+        
+        
+        y_pred = post_trans(logits)
+        dl_label[fname] = int(y_pred.cpu().numpy())
+        real_label[fname] = int(labels_loss.cpu().numpy())
+        accelerator.print(f"Now is valing {fname} file", flush=True)
+    
+    
+    # dl_score = normalize_dl_scores(dl_score)
+    write_to_xlsx(dl_score, dl_label, real_label, os.path.join(config.valer.dl_score_csv_path, f"{name}_dl_score"))
+    metric = {}
+
+    for metric_name in metrics:
+        # for channel in range(channels):
+        batch_acc = metrics[metric_name].aggregate()[0].to(accelerator.device)
+
+        if accelerator.num_processes > 1:
+            batch_acc = accelerator.reduce(batch_acc) / accelerator.num_processes
+
+        # give every single task metric
+        metrics[metric_name].reset()
+        # task_num = channel + 1
+        metric.update(
+            {
+                f"{metric_name}": float(batch_acc.mean()),
+            }
+        )
+    accelerator.print(metric)
+    return dl_score, dl_label, real_label
+    
+
+
 
 
 if __name__ == "__main__":
@@ -279,17 +256,10 @@ if __name__ == "__main__":
         yaml.load(open("config.yml", "r", encoding="utf-8"), Loader=yaml.FullLoader)
     )
     utils.same_seeds(50)
-    
-    if config.finetune.GCM.checkpoint != 'None':
-        checkpoint_name = config.finetune.GCM.checkpoint
-    else:
-        checkpoint_name = config.trainer.choose_dataset + "_" + config.trainer.task + config.trainer.choose_model
-    
-    
     logging_dir = (
         os.getcwd()
         + "/logs/"
-        + checkpoint_name
+        + config.finetune.GCM.checkpoint
         + str(datetime.now())
         .replace(" ", "_")
         .replace("-", "_")
@@ -304,14 +274,13 @@ if __name__ == "__main__":
     accelerator.print(objstr(config))
 
     accelerator.print("load model...")
-    # model = HWAUNETR(in_chans=len(config.GCM_loader.checkModels), fussion = [1,2,4,8], kernel_sizes=[4, 2, 2, 2], depths=[1, 1, 1, 1], dims=[48, 96, 192, 384], heads=[1, 2, 4, 4], hidden_size=768, num_slices_list = [64, 32, 16, 8],
-    #             out_indices=[0, 1, 2, 3])
-    # model = ResNet(in_channels=len(config.GCM_loader.checkModels), pretrained=False)
     model = get_model(config)
-
-    model = load_model(model, accelerator, checkpoint_name)
+    model = load_model(model, accelerator, config.finetune.GCM.checkpoint)
 
     accelerator.print("load dataset...")
+    
+    # 验证时强制batch_size=1
+    config.trainer.batch_size = 1 
     train_loader, val_loader, test_loader, example = get_dataloader(config)
 
     loss_functions = {
@@ -348,5 +317,8 @@ if __name__ == "__main__":
 
     # start valing
     accelerator.print("Start Valing! ")
-    val_one_epoch(model, test_loader, metrics, post_trans, accelerator)
-    compute_dl_score_for_example(model, config, post_trans, example)
+    val_dl_score(model, train_loader, metrics, post_trans, accelerator, name="train")
+    val_dl_score(model, val_loader, metrics, post_trans, accelerator, name="val")
+    val_dl_score(model, test_loader, metrics, post_trans, accelerator, name="test")
+    
+    

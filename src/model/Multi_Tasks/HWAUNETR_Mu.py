@@ -494,7 +494,7 @@ class HWAUNETR(nn.Module):
         
         c_x = self.Class_Decoder(up_feature)
         
-        return x, c_x
+        return c_x, x
     
 def test_weight(model, x):
     for i in range(0, 3):
