@@ -1,7 +1,7 @@
 trainer:
-  choose_model: HWAUNETR   # Class: [HWAUNETR ,HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
+  choose_model: HSL_Net   # Class: [HWAUNETR ,HSL_Net, TFM_UNET_class, ResNet, Vit, TP_Mamba] Seg: [HSL_Net, TFM_UNET_seg, SwinUNETR]
   task: Segmentation   # [Classification, Segmentation]
-  choose_dataset: GCM   # [GCM, GCNC, GICC, FS, BraTS]
+  choose_dataset: GCNC   # [GCM, GCNC, GICC, FS, BraTS]
   num_epochs: 300
   seg_epochs: 300
   warmup: 2        
@@ -67,7 +67,7 @@ GCNC_loader:
   over_add: 10
   # leapfrog: some data error can write in this list to remove from dataloader
   # leapfrog: ['0001902261', '0000439538','0002235469','0001308202']
-  leapfrog: ['H32444']
+  leapfrog: ["H32444",'115194', 'H31540', 'H31928', 'H32047', 'H32217', 'H32221', 'H32618', 'H32724', 'H32873', 'H32937', 'H33213', 'H33393', 'H33707', 'H33804', 'H33811', 'H33830', 'H33949', 'H34165', 'H34220', 'H34332', 'H34888', 'QP-113858', 'NPC-276', '117917', '165752', '167762', 'H29645', 'H31266', 'H32440', 'H32701', 'H33032', 'H33363', 'H33543', 'H34010', 'H34205', 'H34406', 'H34719', '0001274891', '0001270513', '0001254885', '0001223908', '0001195024', '0001154559', '0001139755', '0000319450', '0001116967', '0001087833', '0001072307',"0001055385", "0000964237","0001092171","0001148509","0000422353", "0001222879","0001239826","0000534249", "0001011670","0001089893","0001127678","0001155875","0000731265", "0001100546", "0000576546", "0001225245", "0001240623", "0001252933", "0001263561", "0001008864", "0000916438","0000167562","0000939131","0001121605","0000400532","0001239938"]
   root: /mnt/liangjm/GCNC/
   test_center: 3
   checkModels: ["T1", "T1+C", "T2"]
