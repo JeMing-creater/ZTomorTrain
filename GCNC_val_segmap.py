@@ -335,7 +335,11 @@ def warm_up(
     # 训练
     model.train()
     for i, image_batch in enumerate(train_loader):
-        logits = model(image_batch["image"])
+        # logits = model(image_batch["image"])
+        if config.trainer.choose_model == "HSL_Net":
+            _, logits = model(image_batch["image"])
+        else:
+            logits = model(image_batch["image"])
         total_loss = 0
         for name in loss_functions:
             loss = loss_functions[name](logits, image_batch["label"])
@@ -368,7 +372,10 @@ def val_one_epoch(
     hd95_acc = 0
     hd95_class = []
     for i, image_batch in enumerate(val_loader):
-        logits = inference(image_batch["image"], model)
+        if config.trainer.choose_model == "HSL_Net":
+            _, logits = model(image_batch["image"])
+        else:
+            logits = model(image_batch["image"])
         val_outputs = post_trans(logits)
         for metric_name in metrics:
             metrics[metric_name](y_pred=val_outputs, y=image_batch["label"])
@@ -512,18 +519,18 @@ if __name__ == "__main__":
     )
     accelerator.print(f"dice acc: {dice_acc} best class: {dice_class}")
 
-    model = warm_up(
-        model, loss_functions, train_loader, optimizer, scheduler, accelerator
-    )
+    # model = warm_up(
+    #     model, loss_functions, train_loader, optimizer, scheduler, accelerator
+    # )
 
-    dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
-        model, inference, val_loader, metrics, 0, post_trans, accelerator
-    )
-    accelerator.print(f"dice acc: {dice_acc} best class: {dice_class}")
+    # dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
+    #     model, inference, val_loader, metrics, 0, post_trans, accelerator
+    # )
+    # accelerator.print(f"dice acc: {dice_acc} best class: {dice_class}")
     
-    dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
-        model, inference, test_loader, metrics, 0, post_trans, accelerator
-    )
-    accelerator.print(f"dice acc: {dice_acc} best class: {dice_class}")
+    # dice_acc, dice_class, hd95_acc, hd95_class, val_step = val_one_epoch(
+    #     model, inference, test_loader, metrics, 0, post_trans, accelerator
+    # )
+    # accelerator.print(f"dice acc: {dice_acc} best class: {dice_class}")
 
-    # visualize_for_single(config=config, model=model, accelerator=accelerator)
+    visualize_for_single(config=config, model=model, accelerator=accelerator)
